@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -58,3 +59,13 @@ def test_run_parallel_inline_cancellation():
     )
 
     assert [r.item for r in results] == items[:2]
+
+
+def test_worker_logs_reach_the_parent_handlers(tmp_path, caplog):
+    items = [tmp_path / "first.mp4", tmp_path / "second.mp4"]
+    # logging.warning is a picklable module-level function that logs its argument.
+    with caplog.at_level(logging.WARNING):
+        results = run_parallel(logging.warning, items, workers=2)
+    assert all(r.ok for r in results)
+    messages = {r.getMessage() for r in caplog.records}
+    assert {str(item) for item in items} <= messages
