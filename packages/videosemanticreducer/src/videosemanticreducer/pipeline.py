@@ -14,9 +14,11 @@ thread while frames are decoded.
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -24,7 +26,17 @@ from pathlib import Path
 
 from PIL import Image
 
-from videocore import VideoInfo, compose_grid, evenly_spaced, iter_frames, probe, sample_frames
+from videocore import (
+    BatchResult,
+    VideoInfo,
+    compose_grid,
+    default_workers,
+    evenly_spaced,
+    iter_frames,
+    probe,
+    run_parallel,
+    sample_frames,
+)
 from videosemanticreducer import fingerprint as fp
 from videosemanticreducer.info_card import render_info_card
 from videosemanticreducer.report import write_report
@@ -132,6 +144,38 @@ def process_video(
     result.timings["total"] = time.perf_counter() - started
     logger.info("Finished %s in %.1f s -> %s", video, result.timings["total"], output_dir)
     return result
+
+
+def process_batch(
+    videos: Sequence[Path],
+    output: Path | None,
+    options: ProcessOptions | None = None,
+    *,
+    workers: int | None = None,
+    on_progress: Callable[[int, int, BatchResult], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> list[BatchResult]:
+    """Process several videos in parallel processes; one failure does not stop the others.
+
+    Each video gets its own ``<stem>_summary`` folder, inside `output` when given.
+    Successful results carry that folder as their value.
+    """
+    options = options or ProcessOptions()
+    workers = workers or default_workers()
+    if workers > 1:
+        # Videos already run in parallel; one decoder per video avoids oversubscription.
+        options = dataclasses.replace(options, sampling_workers=1)
+    task = functools.partial(_process_in_batch, output=output, options=options)
+    return run_parallel(
+        task, videos, workers=workers, on_progress=on_progress, should_cancel=should_cancel
+    )
+
+
+def _process_in_batch(video: Path, *, output: Path | None, options: ProcessOptions) -> Path:
+    # Module-level so it can be pickled into worker processes.
+    out_dir = resolve_output_dir(video, output, batch=True)
+    process_video(video, out_dir, options)
+    return out_dir
 
 
 def _snapshots_and_thumbs(
