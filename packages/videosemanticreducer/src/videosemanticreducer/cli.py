@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
-import functools
 import logging
 from pathlib import Path
 
-from videocore import (
-    BatchResult,
-    configure_logging,
-    default_workers,
-    find_videos,
-    probe,
-    run_parallel,
-)
+from videocore import BatchResult, configure_logging, default_workers, find_videos, probe
 from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
-from videosemanticreducer.pipeline import ProcessOptions, process_video, resolve_output_dir
+from videosemanticreducer.pipeline import (
+    ProcessOptions,
+    process_batch,
+    process_video,
+    resolve_output_dir,
+)
 
 APP_NAME = "videosemanticreducer"
 
@@ -126,33 +122,18 @@ def cmd_process(args: argparse.Namespace) -> int:
         logger.warning("No videos found in %s", args.input)
         return 0
     workers = args.workers or default_workers()
-    if workers > 1:
-        # Videos already run in parallel; one decoder per video avoids oversubscription.
-        options = dataclasses.replace(options, sampling_workers=1)
     logger.info("Processing %d videos with %d workers", len(videos), workers)
 
-    task = functools.partial(_process_in_batch, output=args.output, options=options)
-    results = run_batch(task, videos, workers)
+    def progress(done: int, total: int, result: BatchResult) -> None:
+        status = "ok" if result.ok else "FAILED"
+        logger.info("[%d/%d] %s: %s", done, total, result.item.name, status)
+
+    results = process_batch(videos, args.output, options, workers=workers, on_progress=progress)
     failed = [r for r in results if not r.ok]
     logger.info("Done: %d/%d videos archived", len(results) - len(failed), len(results))
     for result in failed:
         logger.error("Failed: %s (%s)", result.item, result.error)
     return 1 if failed else 0
-
-
-def run_batch(task: functools.partial, videos: list[Path], workers: int) -> list[BatchResult]:
-    def progress(done: int, total: int, result: BatchResult) -> None:
-        status = "ok" if result.ok else "FAILED"
-        logger.info("[%d/%d] %s: %s", done, total, result.item.name, status)
-
-    return run_parallel(task, videos, workers=workers, on_progress=progress)
-
-
-def _process_in_batch(video: Path, *, output: Path | None, options: ProcessOptions) -> Path:
-    # Module-level so it can be pickled into worker processes.
-    out_dir = resolve_output_dir(video, output, batch=True)
-    process_video(video, out_dir, options)
-    return out_dir
 
 
 def cmd_fingerprint(args: argparse.Namespace) -> int:

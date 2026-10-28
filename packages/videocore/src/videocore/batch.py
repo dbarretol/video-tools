@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
+from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +63,9 @@ def run_parallel(
     to debug. `on_progress(done, total, result)` is called as each item finishes;
     when `should_cancel()` returns True, pending items are not started and are
     left out of the results.
+
+    Log records emitted in worker processes are forwarded to the handlers of
+    this process's root logger, so they end up in the same log file and console.
     """
     workers = workers or default_workers()
     total = len(items)
@@ -79,7 +85,16 @@ def run_parallel(
             record(index, _call(fn, item))
         return [results[i] for i in sorted(results)]
 
-    with ProcessPoolExecutor(max_workers=min(workers, total)) as pool:
+    context = multiprocessing.get_context("spawn")
+    with (
+        _forward_worker_logs(context) as (initializer, initargs),
+        ProcessPoolExecutor(
+            max_workers=min(workers, total),
+            mp_context=context,
+            initializer=initializer,
+            initargs=initargs,
+        ) as pool,
+    ):
         futures: dict[Future[BatchResult], int] = {
             pool.submit(_call, fn, item): index for index, item in enumerate(items)
         }
@@ -90,6 +105,33 @@ def run_parallel(
                     pending.cancel()
                 break
     return [results[i] for i in sorted(results)]
+
+
+@contextmanager
+def _forward_worker_logs(
+    context: multiprocessing.context.SpawnContext,
+) -> Iterator[tuple[Callable[..., None] | None, tuple[Any, ...]]]:
+    """Yield a pool initializer that sends worker log records to this process's handlers."""
+    root = logging.getLogger()
+    if not root.handlers:
+        yield None, ()
+        return
+    log_queue = context.Queue()
+    listener = QueueListener(log_queue, *root.handlers, respect_handler_level=True)
+    listener.start()
+    try:
+        yield _init_worker_logging, (log_queue, root.level)
+    finally:
+        listener.stop()
+        log_queue.close()
+
+
+def _init_worker_logging(log_queue: Any, level: int) -> None:
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    root.addHandler(QueueHandler(log_queue))
+    root.setLevel(level)
 
 
 def _call(fn: Callable[[Path], Any], item: Path) -> BatchResult:

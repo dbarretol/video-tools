@@ -8,6 +8,7 @@ from videosemanticreducer.pipeline import (
     INFO_CARD_DURATION,
     ProcessOptions,
     _grid_sources,
+    process_batch,
     process_video,
     resolve_output_dir,
     snapshot_timestamps,
@@ -70,6 +71,19 @@ def test_only_metadata(clip, tmp_path):
 def test_audio_only_gets_metadata_and_fingerprint(audio_only, tmp_path):
     result = process_video(audio_only, tmp_path)
     assert sorted(p.name for p in result.outputs) == ["audio.fingerprint.json", "audio_info.txt"]
+
+
+def test_process_batch_isolates_failures(clip, tmp_path):
+    good, broken = tmp_path / "good.mp4", tmp_path / "broken.mp4"
+    good.write_bytes(clip.read_bytes())
+    broken.write_bytes(b"not a video")
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+
+    results = process_batch([good, broken], tmp_path / "out", options, workers=1)
+
+    assert results[0].ok and results[0].value == tmp_path / "out" / "good_summary"
+    assert (tmp_path / "out" / "good_summary" / "good_thumb.jpg").is_file()
+    assert not results[1].ok
 
 
 def test_resolve_output_dir():
