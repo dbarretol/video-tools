@@ -37,6 +37,19 @@ def test_results_follow_input_order_even_if_unsorted(video_only, frame_index):
     assert [frame_index(f) for f in frames] == [15, 0, 8]
 
 
+@pytest.mark.parametrize("mode", ["keyframe", "precise"])
+@pytest.mark.parametrize("workers", [1, 3])
+def test_parallel_workers_give_identical_results(video_with_audio, frame_index, mode, workers):
+    timestamps = [1.9, 0.1, 1.1, 0.6, 1.4, 0.0, 0.9]
+    serial = sample_frames(video_with_audio, timestamps, mode=mode, workers=1)
+    parallel = sample_frames(video_with_audio, timestamps, mode=mode, workers=workers)
+    assert [frame_index(f) for f in parallel] == [frame_index(f) for f in serial]
+
+
+def test_empty_timestamps(video_only):
+    assert sample_frames(video_only, []) == []
+
+
 def test_size_scales_inside_the_decoder(video_only):
     (frame,) = sample_frames(video_only, [0.5], size=(80, 60))
     assert frame.size == (80, 60)
