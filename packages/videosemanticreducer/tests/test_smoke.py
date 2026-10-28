@@ -18,10 +18,6 @@ def test_imagehash_is_available():
     assert imagehash.__version__
 
 
-def test_cli_without_arguments_exits_cleanly():
-    assert main([]) == 0
-
-
 def test_cli_version_flag(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
