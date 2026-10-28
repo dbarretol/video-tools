@@ -30,6 +30,8 @@ from videothumb.snapshots import SnapshotOptions
 logger = logging.getLogger(__name__)
 
 POLL_MS = 100
+# Upper bound to wait for batch workers to be stopped when the window is closed.
+STOP_TIMEOUT_SECONDS = 10
 
 
 @dataclass
@@ -62,6 +64,22 @@ class VideoThumbApp(tk.Tk):
             screen.grid(row=0, column=0, sticky="nsew")
             self.screens[screen_cls] = screen
         self.show(HomeScreen)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+
+    def close(self) -> None:
+        """Close the window; stop running work first so nothing keeps running unseen."""
+        progress = self.screens[ProgressScreen]
+        assert isinstance(progress, ProgressScreen)
+        if progress.busy:
+            if not messagebox.askyesno(
+                "Processing in progress",
+                "Stop processing and close?\n\n"
+                "Videos being processed are stopped and their output may be incomplete.",
+                parent=self,
+            ):
+                return
+            progress.stop(wait=True)
+        self.destroy()
 
     def show(self, screen_cls: type) -> None:
         screen = self.screens[screen_cls]
@@ -207,24 +225,41 @@ class ProgressScreen(ttk.Frame):
         self._cancel_button.pack(pady=16)
         self._queue: queue.Queue[tuple] = queue.Queue()
         self._cancel_event = threading.Event()
+        self._worker: threading.Thread | None = None
+
+    @property
+    def busy(self) -> bool:
+        return self._worker is not None and self._worker.is_alive()
 
     def start(self, mode: Mode, options: Options) -> None:
         self._cancel_event = threading.Event()
-        self._cancel_button.state(["!disabled"])
         if self.app.is_batch:
             self._bar.configure(mode="determinate", maximum=len(self.app.videos), value=0)
             self._status.configure(text=f"Processing {len(self.app.videos)} videos...")
+            self._cancel_button.state(["!disabled"])
+            self._cancel_button.pack(pady=16)
         else:
+            # A single video is processed in this process and cannot be interrupted midway.
             self._bar.configure(mode="indeterminate")
             self._bar.start(15)
             self._status.configure(text=f"Processing {self.app.videos[0].name}...")
-        threading.Thread(target=self._work, args=(mode, options), daemon=True).start()
+            self._cancel_button.pack_forget()
+        # Daemon thread: closing the app must not wait for it (batch workers are stopped
+        # explicitly in `stop`).
+        self._worker = threading.Thread(target=self._work, args=(mode, options), daemon=True)
+        self._worker.start()
         self.after(POLL_MS, self._poll)
 
-    def _cancel(self) -> None:
+    def stop(self, *, wait: bool = False) -> None:
+        """Stop a running batch, killing workers that are mid-video."""
         self._cancel_event.set()
+        if wait and self._worker is not None and self.app.is_batch:
+            self._worker.join(timeout=STOP_TIMEOUT_SECONDS)
+
+    def _cancel(self) -> None:
+        self.stop()
         self._cancel_button.state(["disabled"])
-        self._status.configure(text="Cancelling: videos already started will finish...")
+        self._status.configure(text="Stopping...")
 
     def _work(self, mode: Mode, options: Options) -> None:
         app = self.app
@@ -299,7 +334,7 @@ class ResultScreen(ttk.Frame):
 
         summary = f"{result.succeeded} of {total} videos processed."
         if result.cancelled:
-            summary += " Cancelled before the remaining videos started."
+            summary += " Cancelled: unfinished videos were stopped and may have incomplete output."
         self._summary.configure(text=summary)
 
         self._failures.pack_forget()
