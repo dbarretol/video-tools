@@ -1,0 +1,60 @@
+import os
+from pathlib import Path
+
+import pytest
+
+from videocore import find_videos, run_parallel
+
+
+def test_find_videos_filters_and_sorts(tmp_path):
+    for name in ["b.MP4", "a.mkv", "notes.txt", "c.webm"]:
+        (tmp_path / name).touch()
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "d.mov").touch()
+
+    assert [p.name for p in find_videos(tmp_path)] == ["a.mkv", "b.MP4", "c.webm"]
+    assert [p.name for p in find_videos(tmp_path, recursive=True)] == [
+        "a.mkv",
+        "b.MP4",
+        "c.webm",
+        "d.mov",
+    ]
+
+
+def test_find_videos_missing_folder(tmp_path):
+    with pytest.raises(NotADirectoryError):
+        find_videos(tmp_path / "missing")
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_run_parallel_isolates_errors_and_keeps_order(tmp_path, workers):
+    # os.path.getsize is importable in worker processes, unlike functions defined in tests.
+    (tmp_path / "one.mp4").write_bytes(b"123")
+    (tmp_path / "three.mp4").write_bytes(b"12345")
+    items = [tmp_path / "one.mp4", tmp_path / "missing.mp4", tmp_path / "three.mp4"]
+    progress = []
+
+    results = run_parallel(
+        os.path.getsize, items, workers=workers, on_progress=lambda d, t, r: progress.append(d)
+    )
+
+    assert [r.item for r in results] == items
+    assert [r.ok for r in results] == [True, False, True]
+    assert [r.value for r in results] == [3, None, 5]
+    assert results[1].error.startswith("FileNotFoundError")
+    assert sorted(progress) == [1, 2, 3]
+
+
+def test_run_parallel_inline_cancellation():
+    items = [Path(f"v{i}.mp4") for i in range(5)]
+    seen = []
+
+    results = run_parallel(
+        str,
+        items,
+        workers=1,
+        on_progress=lambda d, t, r: seen.append(d),
+        should_cancel=lambda: len(seen) >= 2,
+    )
+
+    assert [r.item for r in results] == items[:2]

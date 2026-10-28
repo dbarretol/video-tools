@@ -1,0 +1,6 @@
+# Benchmark targets for benchmarks/bench.py. Paths are relative to this file.
+
+[[target]]
+name = "videocore-sampling"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videocore_sampling.py"
