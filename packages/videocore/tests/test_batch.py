@@ -1,5 +1,7 @@
 import logging
+import multiprocessing
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -69,3 +71,31 @@ def test_worker_logs_reach_the_parent_handlers(tmp_path, caplog):
     assert all(r.ok for r in results)
     messages = {r.getMessage() for r in caplog.records}
     assert {str(item) for item in items} <= messages
+
+
+def _cancel_after(seconds):
+    start = time.monotonic()
+    return lambda: time.monotonic() - start > seconds
+
+
+def test_cancelling_stops_running_workers_promptly():
+    # time.sleep is a picklable builtin: each item keeps a worker busy for 30 s.
+    start = time.monotonic()
+    results = run_parallel(time.sleep, [30, 30, 30], workers=2, should_cancel=_cancel_after(1))
+    assert results == []
+    assert time.monotonic() - start < 15
+    # Workers are gone, not just abandoned: nothing would keep the interpreter from exiting.
+    assert multiprocessing.active_children() == []
+
+
+def test_interruption_stops_running_workers():
+    def interrupt():
+        if time.monotonic() - start > 1:
+            raise RuntimeError("interrupted")  # stands in for KeyboardInterrupt
+        return False
+
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run_parallel(time.sleep, [30, 30], workers=2, should_cancel=interrupt)
+    assert time.monotonic() - start < 15
+    assert multiprocessing.active_children() == []
