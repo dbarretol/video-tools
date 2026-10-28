@@ -6,7 +6,7 @@ import logging
 import multiprocessing
 import os
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass
 from logging.handlers import QueueHandler, QueueListener
@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# How often a parallel run checks `should_cancel` while workers are busy.
+CANCEL_POLL_SECONDS = 0.2
 
 VIDEO_EXTENSIONS = frozenset(
     {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".mpg", ".mpeg"}
@@ -60,9 +63,14 @@ def run_parallel(
 
     With more than one worker `fn` runs in separate processes, so it must be a
     module-level (picklable) function. ``workers=1`` runs inline, which is easier
-    to debug. `on_progress(done, total, result)` is called as each item finishes;
-    when `should_cancel()` returns True, pending items are not started and are
-    left out of the results.
+    to debug. `on_progress(done, total, result)` is called as each item finishes.
+
+    `should_cancel()` is polled a few times per second. When it returns True,
+    or when this call is interrupted (e.g. Ctrl+C), worker processes are
+    terminated right away instead of finishing their current item, so nothing
+    keeps running in the background; unfinished items are left out of the
+    results and their outputs may be incomplete. Inline runs (one worker) can
+    only stop between items.
 
     Log records emitted in worker processes are forwarded to the handlers of
     this process's root logger, so they end up in the same log file and console.
@@ -98,13 +106,37 @@ def run_parallel(
         futures: dict[Future[BatchResult], int] = {
             pool.submit(_call, fn, item): index for index, item in enumerate(items)
         }
-        for future in as_completed(futures):
-            record(futures[future], future.result())
-            if should_cancel is not None and should_cancel():
-                for pending in futures:
-                    pending.cancel()
-                break
+        pending = set(futures)
+        try:
+            while pending:
+                done, pending = wait(
+                    pending, timeout=CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
+                )
+                for future in done:
+                    record(futures[future], future.result())
+                if pending and should_cancel is not None and should_cancel():
+                    logger.info("Cancelled: stopping %d unfinished items", len(pending))
+                    break
+        finally:
+            if pending:
+                _stop_workers(pool)
     return [results[i] for i in sorted(results)]
+
+
+def _stop_workers(pool: ProcessPoolExecutor) -> None:
+    """Drop queued items and kill running workers instead of waiting for them."""
+    terminate = getattr(pool, "terminate_workers", None)  # public API from Python 3.14
+    if terminate is not None:
+        terminate()
+        return
+    # Grab the processes before shutdown(), which forgets them; otherwise they would
+    # keep running and the interpreter would wait for them on exit.
+    processes = list((pool._processes or {}).values())  # noqa: SLF001 - no public API before 3.14
+    pool.shutdown(wait=False, cancel_futures=True)
+    for process in processes:
+        process.terminate()
+    for process in processes:
+        process.join(timeout=5)
 
 
 @contextmanager
