@@ -121,7 +121,7 @@ def render_markdown(summary, meta: dict) -> str:
     ]
     for (target, video), phases in summary.items():
         lines += [
-            f"## {target} — {video}",
+            f"## {target} - {video}",
             "",
             "| Phase | Median (s) | Min (s) |",
             "|---|---:|---:|",
