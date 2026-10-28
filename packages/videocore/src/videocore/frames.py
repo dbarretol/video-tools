@@ -73,7 +73,9 @@ def sample_frames(
     """Decode one RGB frame per timestamp (seconds).
 
     Returns a list aligned with `timestamps`; an entry is None when no frame
-    could be decoded there, so callers decide how to handle gaps. `size` scales
+    could be decoded there, so callers decide how to handle gaps. The actual
+    time of each frame (seconds, possibly earlier than requested in keyframe
+    mode) is stored in ``image.info["time"]``. `size` scales
     frames to (width, height) inside the decoder, which is much cheaper than
     resizing full-resolution images afterwards.
 
@@ -276,6 +278,9 @@ class _ReorderBuffer:
 
 def _to_image(frame: av.VideoFrame, size: tuple[int, int] | None) -> Image.Image:
     if size is None:
-        return frame.to_image()
-    width, height = size
-    return frame.reformat(width=width, height=height, format="rgb24").to_image()
+        image = frame.to_image()
+    else:
+        width, height = size
+        image = frame.reformat(width=width, height=height, format="rgb24").to_image()
+    image.info["time"] = frame.time
+    return image

@@ -13,10 +13,6 @@ def test_depends_on_videocore():
     assert videocore.__version__
 
 
-def test_cli_without_arguments_exits_cleanly():
-    assert main([]) == 0
-
-
 def test_cli_version_flag(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--version"])

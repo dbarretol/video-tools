@@ -85,6 +85,14 @@ def test_iter_frames_validates_mode_immediately(video_only):
         iter_frames(video_only, [0.0], mode="fast")
 
 
+def test_frames_carry_their_actual_time(video_with_audio, spec):
+    keyframe, precise = (
+        sample_frames(video_with_audio, [0.7], mode=mode)[0] for mode in ("keyframe", "precise")
+    )
+    assert keyframe.info["time"] == pytest.approx(0.5)  # previous keyframe (every 5 frames)
+    assert precise.info["time"] == pytest.approx(0.7)
+
+
 def test_empty_timestamps(video_only):
     assert sample_frames(video_only, []) == []
 
