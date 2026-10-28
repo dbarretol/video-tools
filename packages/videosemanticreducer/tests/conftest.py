@@ -79,6 +79,9 @@ def audio_only(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(autouse=True)
 def isolated_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep log files written by the CLI out of the user's profile."""
+    """Keep log and config files used by the CLI out of the user's profile."""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("VIDEOSEMANTICREDUCER_CONFIG", raising=False)
