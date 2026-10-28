@@ -9,3 +9,27 @@ driver = "drivers/videocore_sampling.py"
 name = "vsr-pipeline"
 python = "../.venv/Scripts/python.exe"
 driver = "drivers/vsr_pipeline.py"
+
+[[target]]
+name = "videothumb-sheet"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "sheet"]
+
+[[target]]
+name = "videothumb-sheet-precise"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "sheet", "--precise"]
+
+[[target]]
+name = "videothumb-snapshots"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "snapshots", "--count", "10"]
+
+[[target]]
+name = "videothumb-snapshots-precise"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "snapshots", "--count", "10", "--precise"]
