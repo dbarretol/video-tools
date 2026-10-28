@@ -7,7 +7,9 @@
   percentages of the duration; tolerates partial edits.
 
 Format 2.0 takes every frame with precise seeking, so the hashes depend only on
-the content and not on where the encoder placed keyframes. Format 1.0 (the
+the content and not on where the encoder placed keyframes. Frames are decoded in
+draft quality (see ``videocore.frames``): at hashing sizes it changes nothing and
+it is much faster. Format 1.0 (the
 original tool) took the collage frames from keyframes only, so its global hashes
 are not comparable with 2.0; its keyframe hashes are.
 """
@@ -57,7 +59,9 @@ def compute_global_hashes(
     """Hash a square collage of `frames` frames taken between 1% and 99% of the video."""
     timestamps = evenly_spaced(info.duration * 0.01, info.duration * 0.99, frames)
     size = (GLOBAL_FRAME_SIZE, GLOBAL_FRAME_SIZE)
-    images = sample_frames(info.path, timestamps, mode="precise", size=size, workers=workers)
+    images = sample_frames(
+        info.path, timestamps, mode="precise", size=size, workers=workers, draft=True
+    )
     decoded = sum(img is not None for img in images)
     if decoded == 0:
         logger.warning("No frame decoded for the global hashes of %s", info.path)
@@ -86,7 +90,9 @@ def compute_keyframe_hashes(
     """Hash single frames at fixed percentages of the duration; skip positions that fail."""
     timestamps = [info.duration * pct / 100 for pct in positions]
     size = (KEYFRAME_SIZE, KEYFRAME_SIZE)
-    images = sample_frames(info.path, timestamps, mode="precise", size=size, workers=workers)
+    images = sample_frames(
+        info.path, timestamps, mode="precise", size=size, workers=workers, draft=True
+    )
     hashes = []
     for pct, ts, img in zip(positions, timestamps, images, strict=True):
         if img is None:

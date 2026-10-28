@@ -24,7 +24,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from videocore import VideoInfo, compose_grid, evenly_spaced, probe, sample_frames
+from videocore import VideoInfo, compose_grid, evenly_spaced, iter_frames, probe, sample_frames
 from videosemanticreducer import fingerprint as fp
 from videosemanticreducer.info_card import render_info_card
 from videosemanticreducer.report import write_report
@@ -36,9 +36,6 @@ SNAPSHOT_MAX_SIDE = 1280
 THUMB_MAX_SIDE = 240
 THUMB_JPEG_QUALITY = 80
 INFO_CARD_DURATION = 8.0
-# Snapshots are decoded and encoded in batches to bound memory use (a 1280x720 RGB
-# frame takes 2.7 MB).
-SNAPSHOT_BATCH = 32
 
 
 @dataclass(frozen=True)
@@ -166,18 +163,18 @@ def _snapshots_and_thumbs(
 
     with SummaryWriter(summary_path, snap_size, still_duration=options.snap_duration) as writer:
         writer.add(render_info_card(info, snap_size), duration=INFO_CARD_DURATION)
-        for start in range(0, len(timestamps), SNAPSHOT_BATCH):
-            batch = timestamps[start : start + SNAPSHOT_BATCH]
-            images = sample_frames(
-                info.path, batch, size=snap_size, workers=options.sampling_workers
-            )
-            for offset, image in enumerate(images):
-                if image is None:
-                    continue
-                decoded += 1
-                writer.add(image)
-                for cell in grid_sources.get(start + offset, ()):
-                    thumbs[cell] = image.resize(thumb_size, Image.Resampling.BILINEAR)
+        # Frames arrive in order while the next ones are decoded, so encoding overlaps
+        # decoding and only a few full-size frames are in memory at a time.
+        frames = iter_frames(
+            info.path, timestamps, size=snap_size, workers=options.sampling_workers
+        )
+        for index, image in frames:
+            if image is None:
+                continue
+            decoded += 1
+            writer.add(image)
+            for cell in grid_sources.get(index, ()):
+                thumbs[cell] = image.resize(thumb_size, Image.Resampling.BILINEAR)
         if decoded == 0:
             raise RuntimeError(f"No snapshot could be decoded from {info.path}")
 
