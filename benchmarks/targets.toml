@@ -4,3 +4,8 @@
 name = "videocore-sampling"
 python = "../.venv/Scripts/python.exe"
 driver = "drivers/videocore_sampling.py"
+
+[[target]]
+name = "vsr-pipeline"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/vsr_pipeline.py"

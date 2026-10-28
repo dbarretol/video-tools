@@ -1,6 +1,8 @@
+import threading
+
 import pytest
 
-from videocore import VideoOpenError, evenly_spaced, sample_frames
+from videocore import VideoOpenError, evenly_spaced, iter_frames, sample_frames
 
 TOLERANCE = 4
 
@@ -44,6 +46,43 @@ def test_parallel_workers_give_identical_results(video_with_audio, frame_index, 
     serial = sample_frames(video_with_audio, timestamps, mode=mode, workers=1)
     parallel = sample_frames(video_with_audio, timestamps, mode=mode, workers=workers)
     assert [frame_index(f) for f in parallel] == [frame_index(f) for f in serial]
+
+
+@pytest.mark.parametrize("mode", ["keyframe", "precise"])
+def test_draft_decoding_matches_on_a_clip_without_b_frames(video_with_audio, frame_index, mode):
+    # Every frame of the test clip is a reference frame, so draft skips none of them.
+    timestamps = [0.0, 0.3, 1.2, 1.9]
+    full = sample_frames(video_with_audio, timestamps, mode=mode)
+    draft = sample_frames(video_with_audio, timestamps, mode=mode, draft=True)
+    assert [frame_index(f) for f in draft] == [frame_index(f) for f in full]
+
+
+@pytest.mark.parametrize("workers", [1, 3])
+def test_iter_frames_yields_in_timestamp_order(video_only, frame_index, workers):
+    timestamps = [1.5, 0.0, 0.8, 0.4, 1.1]
+    pairs = list(iter_frames(video_only, timestamps, mode="precise", workers=workers))
+    assert [index for index, _ in pairs] == [1, 3, 2, 4, 0]
+    assert [frame_index(image) for _, image in pairs] == [0, 4, 8, 11, 15]
+
+
+def test_iter_frames_can_stop_early_without_leaking_threads(video_only):
+    before = threading.active_count()
+    frames = iter_frames(video_only, [i / 10 for i in range(20)], workers=3)
+    next(frames)
+    frames.close()
+    assert threading.active_count() == before
+
+
+def test_iter_frames_raises_worker_errors(tmp_path):
+    bogus = tmp_path / "bogus.mkv"
+    bogus.write_bytes(b"not a video")
+    with pytest.raises(VideoOpenError):
+        list(iter_frames(bogus, [0.0, 0.5, 1.0], workers=3))
+
+
+def test_iter_frames_validates_mode_immediately(video_only):
+    with pytest.raises(ValueError):
+        iter_frames(video_only, [0.0], mode="fast")
 
 
 def test_empty_timestamps(video_only):
