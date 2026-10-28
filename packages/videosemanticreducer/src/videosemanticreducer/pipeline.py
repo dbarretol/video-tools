@@ -104,15 +104,15 @@ def process_video(
     with ThreadPoolExecutor(max_workers=1) as hasher:
         sha_future = hasher.submit(fp.compute_sha256, video) if options.fingerprint else None
 
-        if info.has_video:
+        if not info.has_video:
+            logger.info("%s has no video stream; only metadata and file hash", video)
+        elif options.summary or options.thumbnail:
             with timer("snapshots"):
                 summary_path = output_dir / f"{stem}_summary.mp4"
                 thumbs = _snapshots_and_thumbs(info, summary_path, options, result)
             if options.thumbnail:
                 with timer("thumbnail"):
                     result.outputs.append(_write_thumbnail(info, thumbs, output_dir, options))
-        else:
-            logger.info("%s has no video stream; only metadata and file hash", video)
 
         if options.fingerprint:
             global_hashes, keyframe_hashes = None, []
@@ -145,8 +145,6 @@ def _snapshots_and_thumbs(
     cells = options.thumb_cols * options.thumb_rows
     thumb_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     if not options.summary:
-        if not options.thumbnail:
-            return []
         timestamps = snapshot_timestamps(info.duration, cells)
         return sample_frames(
             info.path, timestamps, size=thumb_size, workers=options.sampling_workers
