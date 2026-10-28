@@ -33,3 +33,27 @@ name = "videothumb-snapshots-precise"
 python = "../.venv/Scripts/python.exe"
 driver = "drivers/videothumb_jobs.py"
 args = ["--mode", "snapshots", "--count", "10", "--precise"]
+
+[[target]]
+name = "vsr-batch"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "vsr"]
+
+[[target]]
+name = "vsr-batch-serial"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "vsr", "--workers", "1"]
+
+[[target]]
+name = "videothumb-sheet-batch"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "videothumb-sheet"]
+
+[[target]]
+name = "videothumb-sheet-batch-serial"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "videothumb-sheet", "--workers", "1"]
