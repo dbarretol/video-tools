@@ -26,9 +26,15 @@ def draw_frame(index: int) -> Image.Image:
     return image
 
 
-def _write_silence(out: av.container.OutputContainer, seconds: float) -> None:
+def _add_audio(out: av.container.OutputContainer) -> av.AudioStream:
     audio = out.add_stream("aac", rate=AUDIO_RATE)
     audio.layout = "mono"
+    return audio
+
+
+def _write_silence(
+    out: av.container.OutputContainer, audio: av.AudioStream, seconds: float
+) -> None:
     samples = 1024
     for pts in range(0, int(AUDIO_RATE * seconds), samples):
         frame = av.AudioFrame(format="fltp", layout="mono", samples=samples)
@@ -45,18 +51,19 @@ def write_clip(path: Path) -> Path:
         video = out.add_stream("libx264", rate=FPS)
         video.width, video.height, video.pix_fmt = WIDTH, HEIGHT, "yuv420p"
         video.options = {"crf": "18", "g": "10"}
+        audio = _add_audio(out)  # every stream must exist before muxing starts
         for index in range(FRAMES):
             frame = av.VideoFrame.from_image(draw_frame(index))
             frame.pts = index
             out.mux(video.encode(frame))
         out.mux(video.encode())
-        _write_silence(out, FRAMES / FPS)
+        _write_silence(out, audio, FRAMES / FPS)
     return path
 
 
 def write_audio_only(path: Path) -> Path:
     with av.open(str(path), mode="w") as out:
-        _write_silence(out, 2.0)
+        _write_silence(out, _add_audio(out), 2.0)
     return path
 
 

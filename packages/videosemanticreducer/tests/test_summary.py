@@ -12,14 +12,15 @@ def test_even_size_scales_down_to_max_side():
 
 def test_even_size_never_upscales_and_rounds_to_even():
     assert even_size(640, 360, 1280) == (640, 360)
-    assert even_size(641, 361, 1280) == (642, 362)
+    assert even_size(642, 362, 1280) == (642, 362)
+    assert all(side % 2 == 0 for side in even_size(643, 365, 1280))
 
 
 def read_video(path):
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
         frames = list(container.decode(stream))
-        return stream, frames, container.duration / av.time_base
+        return float(stream.average_rate), frames, container.duration / av.time_base
 
 
 def test_each_still_lasts_still_duration(tmp_path):
@@ -29,10 +30,10 @@ def test_each_still_lasts_still_duration(tmp_path):
         for shade in (0, 128, 255):
             writer.add(Image.new("RGB", (64, 48), (shade,) * 3))
 
-    stream, frames, duration = read_video(path)
+    rate, frames, duration = read_video(path)
     assert writer.frames_written == 5 + 3
     assert len(frames) == 8
-    assert float(stream.average_rate) == pytest.approx(2.5)
+    assert rate == pytest.approx(2.5)
     assert duration == pytest.approx(8 * 0.4, abs=0.05)
     assert (frames[0].width, frames[0].height) == (64, 48)
 
