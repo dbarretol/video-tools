@@ -21,7 +21,31 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 
 `process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
-`-r/--recursive`, `-w/--workers`.
+`-r/--recursive`, `-w/--workers`, `-o/--output`.
+
+## Default settings
+
+The defaults of `process` can be changed in a YAML file instead of passing the same flags every
+time. Flags given on the command line still take precedence.
+
+```bash
+videosemanticreducer config init   # write a commented config file with every option
+videosemanticreducer config path   # where it is
+videosemanticreducer config show   # the defaults in effect and where they come from
+```
+
+```yaml
+process:
+  num_snapshots: 100
+  thumb_cols: 10
+  thumb_rows: 10
+  output: D:/Archive   # relative paths are relative to the config file
+```
+
+The file is `%APPDATA%\videosemanticreducer\config.yaml` on Windows and
+`$XDG_CONFIG_HOME/videosemanticreducer/config.yaml` elsewhere. Another file can be used with
+`--config FILE` or the `VIDEOSEMANTICREDUCER_CONFIG` environment variable. Unknown options and
+values of the wrong type are reported as errors.
 
 ## Artifacts
 
