@@ -95,6 +95,18 @@ if ($LASTEXITCODE -eq 3) { Write-Warning "some sheets are incomplete" }
 elseif ($LASTEXITCODE -ne 0) { throw "videothumb failed ($LASTEXITCODE)" }
 ```
 
+With `--json` (`videothumb`, and `videosemanticreducer process` and `status`), stdout receives a
+single JSON document and every message goes to stderr. It has the plan (each video with what will
+happen to it, the length to process and the estimated time), the result of each video (status,
+seconds, error, hint, problems), the lists of videos to retry, the exit code and the log file; an
+error that stops the command is in `error`. It is plain ASCII, so it reads the same in any console
+encoding. `schema` is its version.
+
+```powershell
+$run = videothumb --folder D:\Videos --mode sheet --json | ConvertFrom-Json
+$run.report.items | Where-Object status -eq "failed" | Select-Object video, error, hint
+```
+
 ## Performance
 
 Frames are decoded in-process and only where needed: keyframe seeking for previews, precise

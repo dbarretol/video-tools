@@ -30,7 +30,9 @@ videosemanticreducer status D:/Videos -o D:/Archive --full
 only shows warnings, errors and what to do about them; both work before or after the command
 name. Log messages always go to the log file. In a terminal, `process` shows a progress bar for
 the folder and one row per video being archived, with its current stage. `status -q` only lists
-the archives that are not ready.
+the archives that are not ready. `process --json` and `status --json` write one JSON document to
+stdout (the plan and results, or one entry per archive with `status` `ready`, `incomplete`,
+`failed`, `changed` or `not_archived`); messages then go to stderr.
 
 Videos whose archive is already complete are skipped, so an interrupted or partly failed run over
 a folder can simply be started again. A video is archived again when its manifest is missing or

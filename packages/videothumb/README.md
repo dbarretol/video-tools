@@ -36,6 +36,7 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 | `--strict` | Treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1) | off |
 | `-q`, `--quiet` | Only show warnings, errors and what to do about them | off |
 | `-v`, `--verbose` | Also show debug messages (they always go to the log file) | off |
+| `--json` | Write the plan and the results to stdout as one JSON document (messages go to stderr); see the [main README](../../README.md) | off |
 
 With `--folder`, a plan is printed first: videos to process and already done, the length of
 video to process and a rough time estimate. In a terminal, a progress bar for the folder and one

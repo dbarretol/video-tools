@@ -22,6 +22,13 @@ on its own and does not use it.
 - `report_run_lists(...)`: writes the lists of videos to retry or resume
   (`videocore.write_run_lists`) and says where they are and how to resume.
 
+With `Console(json=True, tool=...)`, stdout is kept for one JSON document and every message goes
+to stderr. The functions above add to it (`plan`, `report`, `run_lists`), a command adds its own
+fields with `console.record(...)` and an error with `console.record_error(exc, hint)`, and
+`console.finish(exit_code, log_file=)` writes it (ASCII, `schema` = `JSON_SCHEMA`) and returns the
+exit code. Without `json`, `record` and `finish` print nothing. `plan_document` and
+`report_document` give the same data as dictionaries.
+
 `Wording` is how a tool names what it does ("archived" rather than "succeeded") and its stages.
 
 ```python
