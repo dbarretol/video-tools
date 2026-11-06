@@ -171,20 +171,32 @@ def test_interruption_stops_running_workers(monkeypatch):
     assert multiprocessing.active_children() == []
 
 
-def _die_once(item):
-    # Module-level so spawned workers can import it. The first call for "a" kills
-    # its own process, like a worker ended from the Task Manager or out of memory.
+DIE_ONCE = """
+import os
+import time
+
+
+def die_once(item):
+    # The first call for "a" kills its own process, like a worker ended from
+    # the Task Manager or out of memory.
     marker = item.parent / "died"
     if item.name == "a" and not marker.exists():
         marker.touch()
         os._exit(1)
     time.sleep(0.5)
     return item.name
+"""
 
 
-def test_a_dead_worker_does_not_abort_the_batch(tmp_path):
+def test_a_dead_worker_does_not_abort_the_batch(tmp_path, monkeypatch):
+    # Spawned workers cannot import this test module (pytest imports it with
+    # importlib), but they get our sys.path, so the task lives in its own module.
+    (tmp_path / "die_once_task.py").write_text(DIE_ONCE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from die_once_task import die_once
+
     items = [tmp_path / name for name in ("a", "b", "c", "d")]
-    results = run_parallel(_die_once, items, workers=2)
+    results = run_parallel(die_once, items, workers=2)
     # The videos that were running are retried, so a worker killed once costs nothing.
     assert [(r.item.name, r.ok, r.value) for r in results] == [
         ("a", True, "a"),
