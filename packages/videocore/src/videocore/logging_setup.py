@@ -9,6 +9,13 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+FOR_THE_USER = {"for_the_user": True}
+"""``extra=`` of log records worth showing on the console even without ``-v``."""
+
+
+def for_the_user(record: logging.LogRecord) -> bool:
+    """Whether `record` was logged with ``extra=FOR_THE_USER``."""
+    return bool(getattr(record, "for_the_user", False))
 
 
 def default_log_dir(app_name: str) -> Path:

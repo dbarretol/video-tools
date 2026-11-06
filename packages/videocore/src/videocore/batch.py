@@ -19,6 +19,7 @@ from typing import Any
 
 from videocore import progress
 from videocore.errors import hint_for
+from videocore.logging_setup import FOR_THE_USER
 from videocore.progress import Cancelled, ProgressEvent
 
 logger = logging.getLogger(__name__)
@@ -265,6 +266,7 @@ def run_parallel(
                     "A worker process stopped unexpectedly; retrying %d %s one at a time",
                     len(suspects),
                     "video" if len(suspects) == 1 else "videos",
+                    extra=FOR_THE_USER,
                 )
     events.close()
     return [results[i] for i in sorted(results)]
