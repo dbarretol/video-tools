@@ -1,6 +1,8 @@
+import ctypes
 import logging
 import multiprocessing
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -22,6 +24,54 @@ def test_find_videos_filters_and_sorts(tmp_path):
         "c.webm",
         "d.mov",
     ]
+
+
+def test_find_videos_ignores_hidden_files_and_folders(tmp_path):
+    for name in ["clip.mp4", "._clip.mp4", ".hidden.mkv"]:
+        (tmp_path / name).touch()
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "inner.mp4").touch()
+
+    assert [p.name for p in find_videos(tmp_path, recursive=True)] == ["clip.mp4"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows file attributes")
+def test_find_videos_ignores_windows_hidden_attribute(tmp_path):
+    (tmp_path / "shown.mp4").touch()
+    hidden = tmp_path / "hidden.mp4"
+    hidden.touch()
+    hidden_folder = tmp_path / "Recycled"
+    hidden_folder.mkdir()
+    (hidden_folder / "deleted.mp4").touch()
+    for path in (hidden, hidden_folder):
+        assert ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x2)  # FILE_ATTRIBUTE_HIDDEN
+
+    assert [p.name for p in find_videos(tmp_path, recursive=True)] == ["shown.mp4"]
+
+
+def test_find_videos_skip_dir_prunes_subfolders(tmp_path):
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "keep" / "a.mp4").touch()
+    (tmp_path / "skip").mkdir()
+    (tmp_path / "skip" / "b.mp4").touch()
+    (tmp_path / "skip" / "deeper").mkdir()
+    (tmp_path / "skip" / "deeper" / "c.mp4").touch()
+    (tmp_path / "top.mp4").touch()
+    seen = []
+
+    def skip(path):
+        seen.append(path.name)
+        return path.name == "skip"
+
+    found = find_videos(tmp_path, recursive=True, skip_dir=skip)
+
+    assert [p.name for p in found] == ["a.mp4", "top.mp4"]
+    assert "deeper" not in seen  # never entered the skipped folder
+
+
+def test_find_videos_skip_dir_does_not_hide_top_level_files(tmp_path):
+    (tmp_path / "top.mp4").touch()
+    assert find_videos(tmp_path, skip_dir=lambda path: True) == [tmp_path / "top.mp4"]
 
 
 def test_find_videos_missing_folder(tmp_path):
