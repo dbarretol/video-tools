@@ -46,6 +46,17 @@ It is not meant to be edited; a missing or damaged file reads as empty. Today it
 longer than its estimate each task takes on this computer: pass `speed=state.speed(task.name)` to
 `plan` and call `state.learn_speed(task.name, report.measured_speed())` after `execute`.
 
+## Inputs
+
+`videocore.collect_inputs(paths, input_lists, recursive=, skip_dir=)` joins the videos given as
+paths (used as they are when they exist, else expanded as patterns), folders and input lists
+(`read_input_list`: one path per line, `#` comments, quotes removed, UTF-8 with or without BOM,
+`-` for standard input) into one `Inputs`, without duplicates and in order. `Inputs.roots` says
+which folder each video came from, so `plan(source=inputs.roots)` recreates its subfolders inside
+an output folder, and `Inputs.invalid` (listed paths that do not exist) goes to
+`plan(invalid=...)`, which plans them as FAILED. `add_input_arguments` adds `PATH...` and
+`--input-list` to an argparse parser.
+
 ## Jobs
 
 `videocore.jobs` is the contract between a tool and whatever runs it (a CLI today, a GUI later).

@@ -80,6 +80,31 @@ console:
   pause: true        # wait for Enter when started from the Explorer
 ```
 
+## Choosing the videos
+
+`videosemanticreducer process`, `fingerprint` and `status` take any number of `PATH` arguments:
+videos, folders (their videos; subfolders too with `-r`) and patterns such as `D:\Videos\*.mkv`,
+which are expanded by the tool because the Windows shell does not. A path that exists is used as
+it is, so names with brackets such as `clip [1080p].mp4` work; only a path that does not exist is
+read as a pattern. Videos given twice are processed once.
+
+`--input-list FILE` (repeatable) reads one path per line from a text file: empty lines and lines
+starting with `#` are skipped, quotes around a path are removed (as added by the Explorer's
+"Copy as path"), relative paths are relative to the list, and the file is UTF-8, with or without
+BOM. A listed path that does not exist does not stop the run: it is reported as failed and goes to
+the list of videos to retry. The retry lists of earlier runs are input lists too.
+
+`--input-list -` reads standard input, relative to the current folder. Windows PowerShell 5.1
+breaks names with accents when piping to a program; write a UTF-8 file instead:
+
+```powershell
+Get-ChildItem D:\Videos -Recurse -Filter *.mp4 | ForEach-Object FullName |
+    Set-Content -Encoding utf8 list.txt
+videosemanticreducer process --input-list list.txt
+```
+
+## Exit codes
+
 Both tools use the same exit codes, so scripts can tell what happened:
 
 | Code | Meaning |

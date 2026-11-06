@@ -13,6 +13,9 @@ videosemanticreducer process movie.mp4
 # Every video in a folder, several in parallel
 videosemanticreducer process D:/Videos -o D:/Archive --workers 2
 
+# Several folders and files, a pattern, and the videos listed in a text file
+videosemanticreducer process D:/Videos E:/Clips/*.mkv --input-list to-archive.txt -o D:/Archive
+
 # Fingerprint only, compare two fingerprints, verify a file against a saved fingerprint
 videosemanticreducer fingerprint movie.mp4
 videosemanticreducer compare a.fingerprint.json b.fingerprint.json
@@ -21,6 +24,11 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 # Before deleting originals: are their archives complete and unchanged?
 videosemanticreducer status D:/Videos -o D:/Archive --full
 ```
+
+`process`, `fingerprint` and `status` take any number of videos, folders and patterns, and
+`--input-list FILE` (see the [main README](../../README.md#choosing-the-videos)). With a single
+video, `-o` is its archive folder; otherwise each video gets `<name>_summary/` inside `-o`.
+A path in a list that does not exist fails that video only.
 
 `process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
