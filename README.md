@@ -6,7 +6,7 @@ Python tools for previewing and archiving video files, built on [PyAV](https://p
 | Tool | What it does |
 |---|---|
 | [**videothumb**](packages/videothumb) | Contact sheets (a grid of frames under the video's details) and folders of full-size frames, for any number of videos and folders. Desktop app and command line. |
-| [**videosemanticreducer**](packages/videosemanticreducer) | Archives videos before you delete them: a short summary video, a thumbnail grid, a metadata report and a perceptual fingerprint that can later tell whether another file is the same video. Command line. |
+| [**videosemanticreducer**](packages/videosemanticreducer) | Archives videos before you delete them: a short summary video, a contact sheet, a metadata report and a perceptual fingerprint that can later tell whether another file is the same video. Command line. |
 
 Both share [**videocore**](packages/videocore), a small library for probing videos, sampling frames,
 composing grids and processing folders in parallel, and [**videoconsole**](packages/videoconsole),
@@ -49,7 +49,7 @@ videothumb frames ./videos --count 15
 videothumb gui
 
 # Archive a video: movie_summary/ with summary video, grid, report and fingerprint
-videosemanticreducer process movie.mp4
+videosemanticreducer archive movie.mp4
 
 # Later: is this download the same video?
 videosemanticreducer verify downloaded.mp4 movie_summary/movie.fingerprint.json
@@ -82,7 +82,7 @@ console:
 
 ## Choosing the videos
 
-`videothumb sheet` and `frames`, and `videosemanticreducer process`, `fingerprint` and `status`
+`videothumb sheet` and `frames`, and `videosemanticreducer archive`, `fingerprint` and `status`
 take any number of `PATH` arguments:
 videos, folders (their videos; subfolders too with `-r`) and patterns such as `D:\Videos\*.mkv`,
 which are expanded by the tool because the Windows shell does not. A path that exists is used as
@@ -101,7 +101,7 @@ breaks names with accents when piping to a program; write a UTF-8 file instead:
 ```powershell
 Get-ChildItem D:\Videos -Recurse -Filter *.mp4 | ForEach-Object FullName |
     Set-Content -Encoding utf8 list.txt
-videosemanticreducer process --input-list list.txt
+videosemanticreducer archive --input-list list.txt
 ```
 
 ## Exit codes
@@ -134,7 +134,7 @@ if ($LASTEXITCODE -eq 3) { Write-Warning "some sheets are incomplete" }
 elseif ($LASTEXITCODE -ne 0) { throw "videothumb failed ($LASTEXITCODE)" }
 ```
 
-With `--json` (`videothumb`, and `videosemanticreducer process` and `status`), stdout receives a
+With `--json` (`videothumb`, and `videosemanticreducer archive` and `status`), stdout receives a
 single JSON document and every message goes to stderr. It has the plan (each video with what will
 happen to it, the length to process and the estimated time), the result of each video (status,
 seconds, error, hint, problems), the lists of videos to retry, the exit code and the log file; an
@@ -142,7 +142,7 @@ error that stops the command is in `error`. It is plain ASCII, so it reads the s
 encoding. `schema` is its version.
 
 ```powershell
-$run = videothumb --folder D:\Videos --mode sheet --json | ConvertFrom-Json
+$run = videothumb sheet D:\Videos --json | ConvertFrom-Json
 $run.report.items | Where-Object status -eq "failed" | Select-Object video, error, hint
 ```
 

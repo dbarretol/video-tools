@@ -18,12 +18,19 @@ command.
 
 - Any number of videos, folders and patterns (`*.mp4`), and `--input-list FILE` with one path per
   line. Listed paths that do not exist fail that video only.
-- Live progress, `-q/--quiet`, `--json`, `--open`; logs reach the console only with `-v`.
+- Live progress (`--no-progress` for one line per video), `-q/--quiet`, `--json`, `--open`; logs reach the console only with `-v`.
 - On Windows: no sleep while processing, a notification after long runs, and the window stays
   open when started from the Explorer (`console` section of the config file).
 - Exit code 3 when some outputs are incomplete (`--strict` turns it into 1).
 
 ### videosemanticreducer
 
+- `archive` replaces `process`; `--summary/--no-summary` replace `--video/--no-video`.
+- The thumbnail grid is now the contact sheet: `<name>_sheet.jpg` instead of `<name>_thumb.jpg`,
+  `--sheet/--no-sheet` instead of `--thumbnail/--no-thumbnail`, and `--grid CxR` instead of
+  `--thumb-cols`/`--thumb-rows`. Archives made before are still read by `status` and are not
+  redone; archiving one again replaces its `_thumb.jpg`.
+- Config file: the section `process:` is now `archive:`, and `thumbnail`, `thumb_cols` and
+  `thumb_rows` are now `sheet`, `sheet_columns` and `sheet_rows`.
 - `status PATH...` checks archives before originals are deleted.
 - `fingerprint` takes several videos.

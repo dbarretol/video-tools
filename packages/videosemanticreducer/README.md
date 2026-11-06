@@ -1,20 +1,20 @@
 # videosemanticreducer
 
 Archive videos before deleting them. For each video it produces a lightweight summary video, a
-thumbnail grid, a plain-text metadata report and a perceptual fingerprint that can later be used to
+contact sheet (a grid of frames), a plain-text metadata report and a perceptual fingerprint that can later be used to
 verify whether a re-downloaded file is the same video.
 
 ## Usage
 
 ```bash
 # One video: artifacts go to movie_summary/ next to it
-videosemanticreducer process movie.mp4
+videosemanticreducer archive movie.mp4
 
 # Every video in a folder, several in parallel
-videosemanticreducer process D:/Videos -o D:/Archive --workers 2
+videosemanticreducer archive D:/Videos -o D:/Archive --workers 2
 
 # Several folders and files, a pattern, and the videos listed in a text file
-videosemanticreducer process D:/Videos E:/Clips/*.mkv --input-list to-archive.txt -o D:/Archive
+videosemanticreducer archive D:/Videos E:/Clips/*.mkv --input-list to-archive.txt -o D:/Archive
 
 # Fingerprint only, compare two fingerprints, verify a file against a saved fingerprint
 videosemanticreducer fingerprint movie.mp4
@@ -25,20 +25,21 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 videosemanticreducer status D:/Videos -o D:/Archive --full
 ```
 
-`process`, `fingerprint` and `status` take any number of videos, folders and patterns, and
+`archive`, `fingerprint` and `status` take any number of videos, folders and patterns, and
 `--input-list FILE` (see the [main README](../../README.md#choosing-the-videos)). With a single
 video, `-o` is its archive folder; otherwise each video gets `<name>_summary/` inside `-o`.
 A path in a list that does not exist fails that video only.
 
-`process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
-`--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
-`-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing` (default) / `--overwrite`,
-`--dry-run`, `--open` (open the output folder when done).
+`archive` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
+`--grid CxR` (contact sheet columns and rows, 12x12), `--no-summary`, `--no-sheet`,
+`--no-fingerprint`, `-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing`
+(default) / `--overwrite`, `--dry-run`, `--open` (open the output folder when done),
+`--no-progress` (one line per video instead of the progress bar).
 `-v/--verbose` also shows debug messages, including the stage each video is in, and `-q/--quiet`
 only shows warnings, errors and what to do about them; both work before or after the command
-name. Log messages always go to the log file. In a terminal, `process` shows a progress bar for
+name. Log messages always go to the log file. In a terminal, `archive` shows a progress bar for
 the folder and one row per video being archived, with its current stage. `status -q` only lists
-the archives that are not ready. `process --json` and `status --json` write one JSON document to
+the archives that are not ready. `archive --json` and `status --json` write one JSON document to
 stdout (the plan and results, or one entry per archive with `status` `ready`, `incomplete`,
 `failed`, `changed` or `not_archived`); messages then go to stderr.
 
@@ -49,15 +50,20 @@ was not made the first time (for example `--fingerprint` after a `--no-fingerpri
 made with other settings, such as another grid size, are reported and kept; `--overwrite` redoes
 every video.
 
-Before processing a folder, `process` reports its plan: how many videos will be archived, how
+Before processing a folder, `archive` reports its plan: how many videos will be archived, how
 many are already done or were done with other settings, the length of video to process, a rough
 time estimate and files that are only in OneDrive (reading them downloads them). `--dry-run`
 prints that plan with one line per video and stops without writing anything.
-When a single video is archived, each step is logged as it starts (summary video, thumbnail
-grid, fingerprint...); with `-v`, batches log them too.
+When a single video is archived, each step is logged as it starts (summary video, contact
+sheet, fingerprint...); with `-v`, batches log them too.
 
 `verify` and `compare` exit with 0 when the videos match, 1 when they do not (or the match is
 uncertain) and 2 when a file cannot be read.
+
+The names of earlier versions still work, with a warning that shows the new one; they will be
+removed: `process` (now `archive`), `--video/--no-video` (`--summary/--no-summary`),
+`--thumbnail/--no-thumbnail` (`--sheet/--no-sheet`) and `--thumb-cols N`/`--thumb-rows N`
+(`--grid CxR`).
 
 Folder scans skip hidden files and folders (such as macOS `._movie.mp4` files), and recursive scans
 skip the `<stem>_summary` folders written by earlier runs, so summary videos are never archived
@@ -80,15 +86,15 @@ with `--strict`.
 ## Checking archives before deleting originals
 
 `status PATH...` takes videos, archive folders or folders of videos (`-r` for subfolders; `-o` and
-`--config` as given to `process`) and prints one line per video:
+`--config` as given to `archive`) and prints one line per video:
 
 | Status | Meaning |
 |---|---|
 | `READY` | The manifest says the archive is complete, every artifact is there with its size, and the original, if still present, is the video archived. The original can be deleted. |
-| `INCOMPLETE` | Archived, but some artifacts are incomplete; run `process` again |
+| `INCOMPLETE` | Archived, but some artifacts are incomplete; run `archive` again |
 | `FAILED` | The archive run failed or did not finish |
 | `CHANGED` | An artifact is missing or was modified, or the original is not the video archived |
-| `NOT ARCHIVED` | No archive was found where `process` would put it |
+| `NOT ARCHIVED` | No archive was found where `archive` would put it |
 
 Archives whose original was already deleted are listed too. `--full` also compares the SHA-256
 of every artifact and of the original with those in the manifest, which reads every file; use it
@@ -96,7 +102,7 @@ before deleting. The exit code is 0 only when every archive is `READY`.
 
 ## Default settings
 
-The defaults of `process` can be changed in a YAML file instead of passing the same flags every
+The defaults of `archive` can be changed in a YAML file instead of passing the same flags every
 time. Flags given on the command line still take precedence.
 
 ```bash
@@ -113,10 +119,10 @@ A relative path given to `config set output` is taken from the current folder. T
 `$VISUAL` or `$EDITOR` when set, otherwise the system's editor for text files.
 
 ```yaml
-process:
+archive:
   num_snapshots: 100
-  thumb_cols: 10
-  thumb_rows: 10
+  sheet_columns: 10    # --grid 10x8 on the command line
+  sheet_rows: 8
   output: D:/Archive   # relative paths are relative to the config file
 console:
   notify_after: 10     # minutes a run must take to end with a notification; 0 = never
@@ -141,7 +147,7 @@ For `movie.mp4`:
 | File | Content |
 |---|---|
 | `movie_summary.mp4` | An 8 s info card followed by evenly spaced snapshots |
-| `movie_thumb.jpg` | Grid of thumbnails covering the whole video |
+| `movie_sheet.jpg` | Contact sheet: a grid of frames covering the whole video (`movie_thumb.jpg` in archives made before 0.2, which `status` still checks; archiving again replaces it) |
 | `movie_info.txt` | Container, stream and tag metadata |
 | `movie.fingerprint.json` | SHA-256, global perceptual hashes and per-position hashes |
 | `movie.archive.json` | Manifest, written last: the source video, the options used and every file above with its size and SHA-256 |
