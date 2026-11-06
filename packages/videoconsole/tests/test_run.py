@@ -32,7 +32,7 @@ class Task:
     def output(self, slot: OutputSlot) -> Path:
         return slot.folder / f"{slot.name}.txt"
 
-    def state(self, output, name, options):
+    def state(self, video, output, name, options):
         return Status.SKIPPED if output.exists() else None
 
     def estimate(self, duration, options):

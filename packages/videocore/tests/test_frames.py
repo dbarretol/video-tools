@@ -108,9 +108,29 @@ def test_default_size_is_native_resolution(video_only, spec):
     assert frame.size == (spec.width, spec.height)
 
 
-def test_timestamp_past_the_end_still_returns_a_frame(video_only):
-    (frame,) = sample_frames(video_only, [60.0], mode="precise")
-    assert frame is not None
+def test_timestamp_just_past_the_end_returns_the_last_frame(video_only, frame_index, spec):
+    # The clip lasts 2 s and its last frame starts at 1.9 s.
+    (frame,) = sample_frames(video_only, [2.5], mode="precise")
+    assert frame_index(frame) == spec.frames - 1
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_timestamp_far_past_the_end_is_a_gap(video_only, fallback):
+    mode = "keyframe" if fallback else "precise"
+    frames = sample_frames(video_only, [1.0, 30.0, 60.0], mode=mode, fallback=fallback)
+    assert frames[0] is not None
+    assert frames[1:] == [None, None]
+
+
+def test_a_cut_file_gives_gaps_not_repeated_frames(video_only, tmp_path):
+    # Half downloaded: the header still says 2 s, but the data ends earlier.
+    cut = tmp_path / "cut.mkv"
+    data = video_only.read_bytes()
+    cut.write_bytes(data[: len(data) // 2])
+    frames = sample_frames(cut, evenly_spaced(0.0, 2.0, 10, endpoints=False), fallback=True)
+    times = [f.info["time"] for f in frames if f is not None]
+    assert None in frames
+    assert len(times) == len(set(times))  # no position shows the frame of another
 
 
 def test_unknown_mode(video_only):

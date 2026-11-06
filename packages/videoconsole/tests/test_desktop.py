@@ -1,4 +1,6 @@
 import io
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +23,7 @@ class Task:
     def output(self, slot: OutputSlot) -> Path:
         return slot.folder / f"{slot.name}.txt"
 
-    def state(self, output, name, options):
+    def state(self, video, output, name, options):
         return None
 
     def estimate(self, duration, options):
@@ -84,6 +86,7 @@ def test_keep_awake_is_released_even_on_errors(monkeypatch):
 def test_launched_alone_means_no_shell_on_the_console(monkeypatch, programs, alone):
     monkeypatch.setattr(desktop, "console_programs", lambda: programs)
     monkeypatch.setattr(desktop, "started_hidden", lambda: False)
+    monkeypatch.setattr(desktop, "started_by_service", lambda: False)
     monkeypatch.setattr("sys.stdin", type("Tty", (io.StringIO,), {"isatty": lambda self: True})())
     assert launched_alone() is alone
 
@@ -94,6 +97,27 @@ def test_a_hidden_window_is_never_alone(monkeypatch):
     monkeypatch.setattr(desktop, "started_hidden", lambda: True)
     monkeypatch.setattr("sys.stdin", type("Tty", (io.StringIO,), {"isatty": lambda self: True})())
     assert launched_alone() is False
+
+
+def test_a_scheduled_task_is_never_alone(monkeypatch):
+    # The Task Scheduler shows the window of a task, but nobody waits in front of it.
+    monkeypatch.setattr(desktop, "console_programs", lambda: ["videothumb", "python"])
+    monkeypatch.setattr(desktop, "started_hidden", lambda: False)
+    monkeypatch.setattr(desktop, "started_by_service", lambda: True)
+    monkeypatch.setattr("sys.stdin", type("Tty", (io.StringIO,), {"isatty": lambda self: True})())
+    assert launched_alone() is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process table")
+def test_started_by_service_walks_up_to_the_starting_program(monkeypatch):
+    real, me = desktop._processes, os.getpid()
+    table = {me: (10, "python"), 10: (20, "vthumb"), 20: (4, "svchost")}
+    monkeypatch.setattr(desktop, "_processes", lambda kernel32: table)
+    monkeypatch.setattr(desktop, "_console_pids", lambda kernel32: [me, 10])
+    assert desktop.started_by_service() is True
+    table[20] = (4, "explorer")
+    assert desktop.started_by_service() is False
+    assert len(real(desktop._kernel32())) > 1  # the real table can be read
 
 
 def test_started_hidden_reads_the_startup_info():

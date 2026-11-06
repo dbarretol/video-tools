@@ -1,4 +1,5 @@
 import errno
+import sys
 
 import av
 import pytest
@@ -7,6 +8,7 @@ from videocore import (
     NoFramesError,
     NoVideoStreamError,
     VideoOpenError,
+    errors,
     hint_for,
     probe,
     run_parallel,
@@ -81,3 +83,15 @@ def test_failed_items_carry_their_hint(tmp_path):
     (result,) = run_parallel(probe, [broken], workers=1)
     assert not result.ok
     assert "damaged" in result.hint
+
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows path limit")
+
+
+@windows_only
+def test_a_path_too_long_for_windows_says_so(tmp_path):
+    long_name = str(tmp_path / ("x" * 250) / "clip_sheet.jpg.part")
+    exc = FileNotFoundError(errno.ENOENT, "No such file or directory", long_name)
+    assert hint_for(exc) == errors.LONG_PATH_HINT
+    short = FileNotFoundError(errno.ENOENT, "No such file or directory", str(tmp_path / "a"))
+    assert hint_for(short) != errors.LONG_PATH_HINT

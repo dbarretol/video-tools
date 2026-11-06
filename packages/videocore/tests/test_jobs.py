@@ -27,7 +27,7 @@ class FakeTask:
     def output(self, slot: OutputSlot) -> Path:
         return slot.folder / f"{slot.name}.txt"
 
-    def state(self, output: Path, name: str, options: Options) -> Status | None:
+    def state(self, video: Path, output: Path, name: str, options: Options) -> Status | None:
         if not output.is_file():
             return None
         same = output.read_text(encoding="utf-8") == options.text

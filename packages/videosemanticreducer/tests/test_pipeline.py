@@ -155,6 +155,18 @@ def test_archive_state(clip, tmp_path):
     assert archive_state(tmp_path, "clip", with_fingerprint) is None
 
 
+def test_an_archive_of_another_file_is_not_complete(clip, tmp_path):
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
+    out = tmp_path / "out"
+    process_video(clip, out, options)
+    assert archive_state(out, "clip", options, video=clip) == "complete"
+
+    # Replaced by another video of the same name: archive it, do not skip it.
+    other = tmp_path / "clip.mp4"
+    other.write_bytes(clip.read_bytes() + b"\0")
+    assert archive_state(out, "clip", options, video=other) is None
+
+
 def test_batch_skips_complete_archives(clip, tmp_path):
     videos = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
     for video in videos:

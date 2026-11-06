@@ -1,4 +1,5 @@
 import io
+import sys
 from pathlib import Path
 
 import pytest
@@ -87,3 +88,9 @@ def test_one_file_given_by_itself(files):
     inputs = collect_inputs([files / "notes.txt"])  # used whatever its extension
     assert inputs.single_file and names(inputs.videos) == ["notes.txt"]
     assert not collect_inputs([files / "a.mp4", files / "a.mp4"]).single_file
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path limit")
+def test_a_missing_path_too_long_for_windows_says_why(tmp_path):
+    with pytest.raises(UsageError, match="longer than Windows allows"):
+        expand_path(tmp_path / ("x" * 250) / "clip.mp4")
