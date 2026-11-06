@@ -21,6 +21,9 @@ CANCEL_POLL_SECONDS = 0.2
 VIDEO_EXTENSIONS = frozenset(
     {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".mpg", ".mpeg"}
 )
+# stat.FILE_ATTRIBUTE_* exist only on Windows builds of Python.
+_FILE_ATTRIBUTE_HIDDEN = 0x2
+_FILE_ATTRIBUTE_SYSTEM = 0x4
 
 
 @dataclass
@@ -36,14 +39,46 @@ def find_videos(
     *,
     recursive: bool = False,
     extensions: Iterable[str] = VIDEO_EXTENSIONS,
+    skip_dir: Callable[[Path], bool] | None = None,
 ) -> list[Path]:
-    """List video files in `folder`, sorted by path."""
+    """List video files in `folder`, sorted by path.
+
+    Hidden files and folders (dot names such as macOS ``._clip.mp4`` resource
+    forks, or the Windows hidden attribute) are ignored. When `recursive`,
+    subfolders for which `skip_dir(path)` returns True are not entered; apps use
+    it to keep their own output folders out of the scan.
+    """
     root = Path(folder)
     if not root.is_dir():
         raise NotADirectoryError(f"Folder not found: {root}")
     suffixes = {ext.lower() for ext in extensions}
-    candidates = root.rglob("*") if recursive else root.iterdir()
-    return sorted(p for p in candidates if p.is_file() and p.suffix.lower() in suffixes)
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        if recursive:
+            # Pruning in place keeps os.walk out of the skipped folders.
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if not is_hidden(current / name)
+                and not (skip_dir is not None and skip_dir(current / name))
+            ]
+        else:
+            dirnames.clear()
+        found += [
+            current / name
+            for name in filenames
+            if Path(name).suffix.lower() in suffixes and not is_hidden(current / name)
+        ]
+    return sorted(found)
+
+
+def is_hidden(path: Path) -> bool:
+    """Dot names on any platform, plus the hidden or system attribute on Windows."""
+    if path.name.startswith("."):
+        return True
+    attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+    return bool(attributes & (_FILE_ATTRIBUTE_HIDDEN | _FILE_ATTRIBUTE_SYSTEM))
 
 
 def default_workers() -> int:
