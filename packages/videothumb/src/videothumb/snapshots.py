@@ -8,6 +8,7 @@ from pathlib import Path
 
 from videocore import atomic_write, evenly_spaced, iter_frames, probe
 from videocore.options import option, validate
+from videocore.verify import FrameCount
 from videothumb.common import Sampling, jpeg_quality_option, sampling_option
 
 logger = logging.getLogger(__name__)
@@ -34,10 +35,12 @@ def make_snapshots(
     options: SnapshotOptions | None = None,
     *,
     decoders: int | None = None,
+    counts: FrameCount | None = None,
 ) -> list[Path]:
     """Save `options.count` snapshots as ``snapshot_001.jpg``... in `output_dir`.
 
     `decoders` limits the containers decoding in parallel (see ``videocore.iter_frames``).
+    `counts`, when given, receives how many snapshots could be decoded.
 
     Frames that cannot be decoded are skipped, so fewer files may be written;
     their numbers stay unused so names always reflect the position in the video.
@@ -64,6 +67,8 @@ def make_snapshots(
         with atomic_write(path) as part:
             image.save(part, "JPEG", quality=options.jpeg_quality)
         saved.append(path)
+    if counts is not None:
+        counts.decoded, counts.total = len(saved), options.count
     if not saved:
         raise RuntimeError(f"No frame could be decoded from {info.path}")
     if len(saved) < options.count:

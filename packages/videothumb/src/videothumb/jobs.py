@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from videocore import (
@@ -16,6 +16,7 @@ from videocore import (
     remove_partials,
     run_task,
 )
+from videocore.verify import FrameCount, OutputError, check_image
 from videothumb.common import Mode
 from videothumb.sheet import SheetOptions, default_sheet_path, make_sheet
 from videothumb.snapshots import SnapshotOptions, default_snapshot_dir, make_snapshots
@@ -26,6 +27,16 @@ Options = SheetOptions | SnapshotOptions
 # sampling depends too much on the keyframe interval to estimate.
 SECONDS_PER_SHEET_FRAME = 0.05
 SECONDS_PER_SNAPSHOT = 0.1
+
+
+@dataclass
+class Produced:
+    """What a task run returns: its output and how many frames it could decode."""
+
+    output: Path
+    frames: FrameCount = field(default_factory=FrameCount)
+    files: list[Path] = field(default_factory=list)
+    """The snapshots written."""
 
 
 @dataclass(frozen=True)
@@ -42,8 +53,18 @@ class SheetTask:
 
     def run(
         self, video: Path, output: Path, name: str, options: SheetOptions, decoders: int | None
-    ) -> Path:
-        return make_sheet(video, output, options, decoders=decoders)
+    ) -> Produced:
+        produced = Produced(output)
+        make_sheet(video, output, options, decoders=decoders, counts=produced.frames)
+        return produced
+
+    def verify(self, output: Path, value: Produced, options: SheetOptions) -> list[str]:
+        width, _ = check_image(output)
+        expected = options.columns * options.thumbnail_width
+        if width != expected:
+            raise OutputError(f"{output.name} is {width} pixels wide, expected {expected}")
+        problem = value.frames.problem("contact sheet")
+        return [problem] if problem else []
 
     def cleanup(self, output: Path) -> None:
         part_path(output).unlink(missing_ok=True)
@@ -68,9 +89,18 @@ class SnapshotsTask:
 
     def run(
         self, video: Path, output: Path, name: str, options: SnapshotOptions, decoders: int | None
-    ) -> Path:
-        make_snapshots(video, output, options, decoders=decoders)
-        return output
+    ) -> Produced:
+        produced = Produced(output)
+        produced.files = make_snapshots(
+            video, output, options, decoders=decoders, counts=produced.frames
+        )
+        return produced
+
+    def verify(self, output: Path, value: Produced, options: SnapshotOptions) -> list[str]:
+        for path in value.files:
+            check_image(path)
+        problem = value.frames.problem("snapshots")
+        return [problem] if problem else []
 
     def cleanup(self, output: Path) -> None:
         remove_partials(output)
@@ -160,7 +190,7 @@ def _batch_result(item: ItemResult) -> BatchResult:
     return BatchResult(
         item=item.video,
         ok=item.ok,
-        value=item.output if skipped else item.value,
+        value=item.output,
         error=item.error,
         skipped=skipped,
         error_type=item.error_type,

@@ -22,6 +22,7 @@ from videocore import (
     sample_frames,
 )
 from videocore.options import option, validate
+from videocore.verify import FrameCount
 from videothumb.common import Sampling, jpeg_quality_option, sampling_option
 
 BACKGROUND = (30, 30, 30)
@@ -61,11 +62,13 @@ def make_sheet(
     options: SheetOptions | None = None,
     *,
     decoders: int | None = None,
+    counts: FrameCount | None = None,
 ) -> Path:
     """Build the contact sheet of `video` and save it as a JPEG at `output`.
 
     `decoders` limits the containers decoding in parallel (see
     ``videocore.sample_frames``); batches pass 1 since videos already run in parallel.
+    `counts`, when given, receives how many thumbnails could be decoded.
     """
     options = options or SheetOptions()
     info = probe(video)
@@ -84,6 +87,8 @@ def make_sheet(
         stage="frames",
     )
     decoded = sum(frame is not None for frame in frames)
+    if counts is not None:
+        counts.decoded, counts.total = decoded, len(frames)
     if decoded == 0:
         raise RuntimeError(f"No frame could be decoded from {info.path}")
     if decoded < len(frames):

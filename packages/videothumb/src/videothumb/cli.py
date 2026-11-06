@@ -97,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show what would be done, without processing anything",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
     return parser
 
@@ -212,7 +217,9 @@ def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
         raise RuntimeError(result.error)
     noun = "Contact sheet" if mode is Mode.SHEET else "Snapshots"
     print(f"{noun} saved to {result.output}")
-    return EXIT_OK
+    for problem in result.problems:
+        print(f"Warning: incomplete output: {problem}", file=sys.stderr)
+    return report.exit_status(strict=args.strict)
 
 
 def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Values) -> int:
@@ -232,20 +239,26 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Va
         print(line)
 
     def progress(done: int, total: int, result: ItemResult) -> None:
-        status = "ok" if result.ok else "FAILED"
+        status = result.status.value if result.status is Status.OK else result.status.upper()
         print(f"[{done}/{total}] {result.video.name}: {status}")
 
     report = execute(planned, on_progress=progress, on_event=log_event)
     state.learn_speed(task.name, report.measured_speed())
     failed = report.failed
     skipped = report.count(Status.SKIPPED)
-    summary = f"Done: {report.count(Status.OK)} succeeded, {len(failed)} failed"
+    degraded = report.degraded
+    summary = f"Done: {report.count(Status.OK)} succeeded"
+    if degraded:
+        summary += f", {len(degraded)} incomplete"
+    summary += f", {len(failed)} failed"
     if skipped:
         summary += f", {skipped} skipped (output already exists)"
     print(summary + ".")
+    for result in degraded:
+        print(f"  - {result.video.name}: incomplete: {'; '.join(result.problems)}", file=sys.stderr)
     for result in failed:
         print(f"  - {result.video.name}: {result.error}", file=sys.stderr)
-    return report.exit_code
+    return report.exit_status(strict=args.strict)
 
 
 def log_event(event: ProgressEvent) -> None:
