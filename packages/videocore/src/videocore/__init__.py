@@ -7,6 +7,7 @@ from videocore.errors import VideoOpenError
 from videocore.frames import evenly_spaced, iter_frames, sample_frames
 from videocore.grid import compose_grid
 from videocore.logging_setup import configure_logging, default_log_dir
+from videocore.outputs import OutputCollisionError, OutputSlot, output_folder, plan_outputs
 from videocore.probe import AudioStreamInfo, VideoInfo, VideoStreamInfo, format_hms, probe
 
 __version__ = version("videocore")
@@ -14,6 +15,8 @@ __version__ = version("videocore")
 __all__ = [
     "AudioStreamInfo",
     "BatchResult",
+    "OutputCollisionError",
+    "OutputSlot",
     "VideoInfo",
     "VideoOpenError",
     "VideoStreamInfo",
@@ -25,6 +28,8 @@ __all__ = [
     "find_videos",
     "format_hms",
     "iter_frames",
+    "output_folder",
+    "plan_outputs",
     "probe",
     "run_parallel",
     "sample_frames",

@@ -87,9 +87,10 @@ def default_workers() -> int:
 
 
 def run_parallel(
-    fn: Callable[[Path], Any],
+    fn: Callable[..., Any],
     items: Sequence[Path],
     *,
+    item_args: Sequence[Any] | None = None,
     workers: int | None = None,
     on_progress: Callable[[int, int, BatchResult], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -99,6 +100,10 @@ def run_parallel(
     With more than one worker `fn` runs in separate processes, so it must be a
     module-level (picklable) function. ``workers=1`` runs inline, which is easier
     to debug. `on_progress(done, total, result)` is called as each item finishes.
+
+    With `item_args` (one value per item) `fn` is called as ``fn(item, arg)``.
+    Each worker receives only the value of its own item, so per-item data such
+    as output paths does not have to be bound into `fn` for every item.
 
     `should_cancel()` is polled a few times per second. When it returns True,
     or when this call is interrupted (e.g. Ctrl+C), worker processes are
@@ -112,6 +117,9 @@ def run_parallel(
     """
     workers = workers or default_workers()
     total = len(items)
+    if item_args is not None and len(item_args) != total:
+        raise ValueError("item_args must have one value per item")
+    calls = [(item,) if item_args is None else (item, item_args[i]) for i, item in enumerate(items)]
     results: dict[int, BatchResult] = {}
 
     def record(index: int, result: BatchResult) -> None:
@@ -122,10 +130,10 @@ def run_parallel(
             on_progress(len(results), total, result)
 
     if workers == 1 or total <= 1:
-        for index, item in enumerate(items):
+        for index, args in enumerate(calls):
             if should_cancel is not None and should_cancel():
                 break
-            record(index, _call(fn, item))
+            record(index, _call(fn, *args))
         return [results[i] for i in sorted(results)]
 
     context = multiprocessing.get_context("spawn")
@@ -139,7 +147,7 @@ def run_parallel(
         ) as pool,
     ):
         futures: dict[Future[BatchResult], int] = {
-            pool.submit(_call, fn, item): index for index, item in enumerate(items)
+            pool.submit(_call, fn, *args): index for index, args in enumerate(calls)
         }
         pending = set(futures)
         try:
@@ -201,8 +209,8 @@ def _init_worker_logging(log_queue: Any, level: int) -> None:
     root.setLevel(level)
 
 
-def _call(fn: Callable[[Path], Any], item: Path) -> BatchResult:
+def _call(fn: Callable[..., Any], item: Path, *args: Any) -> BatchResult:
     try:
-        return BatchResult(item=item, ok=True, value=fn(item))
+        return BatchResult(item=item, ok=True, value=fn(item, *args))
     except Exception as exc:  # noqa: BLE001 - one failing video must not abort the batch
         return BatchResult(item=item, ok=False, error=f"{type(exc).__name__}: {exc}")
