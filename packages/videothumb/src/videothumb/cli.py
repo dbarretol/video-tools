@@ -1,4 +1,4 @@
-"""Command line: ``videothumb sheet|frames PATH...``, ``videothumb gui`` and ``videothumb config``.
+"""Command line: ``videothumb sheet|frames|pack PATH...``, ``gui`` and ``config``.
 
 The old form (``--video``/``--folder`` with ``--mode``) still works for now,
 with a warning that shows the new command.
@@ -49,6 +49,7 @@ from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
 from videothumb.config import CONFIG, CONSOLE_SECTION, RUN_SECTION
 from videothumb.jobs import TASKS, Options, default_output
+from videothumb.pack import PackOptions
 from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
 
@@ -68,7 +69,7 @@ WORDING = Wording(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
-        description="Contact sheets and frames of videos.",
+        description="Contact sheets and frames of videos, apart or in one ZIP.",
         epilog=(
             f"`{APP_NAME} COMMAND --help` shows the options of a command. Defaults shown are the "
             f"built-in ones; a config file can change them (see `{APP_NAME} config --help`)."
@@ -102,7 +103,7 @@ def common_options() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         help=(
-            "for one video: the sheet file or frames folder; otherwise a folder that receives "
+            "for one video: the sheet, frames folder or ZIP; otherwise a folder that receives "
             "every output, recreating subfolders with -r (default: next to each video)"
         ),
     )
@@ -126,7 +127,7 @@ def common_options() -> argparse.ArgumentParser:
         "--skip-existing",
         dest="skip_existing",
         action="store_true",
-        help="leave videos whose sheet or frames folder already exists",
+        help="leave videos whose output (sheet, frames folder or ZIP) already exists",
     )
     # Explicit: a store_false action (--overwrite) would otherwise make the default True.
     common.set_defaults(skip_existing=False)
@@ -265,13 +266,15 @@ def run(args: argparse.Namespace, console: Console) -> int:
         return EXIT_FAILED
 
 
-MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions]] = {
+MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions] | type[PackOptions]] = {
     Mode.SHEET: SheetOptions,
     Mode.FRAMES: SnapshotOptions,
+    Mode.PACK: PackOptions,
 }
 COMMANDS = {
     Mode.SHEET: "a contact sheet per video: a grid of frames under the video's details",
     Mode.FRAMES: "a folder of full-size frames per video, named after the video and the time",
+    Mode.PACK: "a ZIP per video with its contact sheet and its frames, decoding the video once",
 }
 
 
@@ -336,7 +339,7 @@ def run_single(
         console.error(str(result.error))
         console.hint(result.hint, args.log_file)
         return EXIT_FAILED
-    noun = "Contact sheet" if mode is Mode.SHEET else "Frames"
+    noun = {Mode.SHEET: "Contact sheet", Mode.FRAMES: "Frames", Mode.PACK: "Pack"}[mode]
     console.info(f"{noun} saved to {result.output}", "ok")
     for problem in result.problems:
         console.warning(f"incomplete output: {problem}")

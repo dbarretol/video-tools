@@ -18,6 +18,7 @@ class Mode(StrEnum):
     FRAMES = "frames"
     SNAPSHOTS = "frames"
     """Old name of FRAMES, still used by the tkinter app."""
+    PACK = "pack"
 
     @classmethod
     def _missing_(cls, value: object) -> Mode | None:

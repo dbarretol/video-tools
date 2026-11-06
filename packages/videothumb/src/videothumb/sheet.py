@@ -78,13 +78,12 @@ def make_sheet(
         raise NoVideoStreamError(f"No video stream in {info.path}")
 
     timestamps = evenly_spaced(0, info.duration, options.count, endpoints=False)
-    width = options.thumbnail_width
-    height = max(2, round(width * info.video.height / info.video.width))
+    size = cell_size(info, options.thumbnail_width)
     frames = sample_frames(
         info.path,
         timestamps,
         mode=options.sampling,
-        size=(width, height),
+        size=size,
         workers=decoders,
         stage="frames",
         fallback=True,
@@ -102,11 +101,17 @@ def make_sheet(
             len(frames),
         )
 
-    sheet = render_sheet(info, frames, timestamps, options.columns, (width, height))
+    sheet = render_sheet(info, frames, timestamps, options.columns, size)
     output = Path(output)
     with atomic_write(output) as part:
         sheet.save(part, "JPEG", quality=options.jpeg_quality)
     return output
+
+
+def cell_size(info: VideoInfo, width: int) -> tuple[int, int]:
+    """The size of each thumbnail: `width` wide, with the video's aspect ratio."""
+    assert info.video is not None
+    return width, max(2, round(width * info.video.height / info.video.width))
 
 
 def render_sheet(

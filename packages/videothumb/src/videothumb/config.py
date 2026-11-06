@@ -10,6 +10,7 @@ from videoconsole import ConsoleOptions
 from videocore import RunOptions
 from videocore.config import AppConfig, Section
 from videothumb.common import APP_NAME, Mode
+from videothumb.pack import PackOptions
 from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
 
@@ -21,6 +22,7 @@ CONFIG = AppConfig(
     (
         Section(Mode.SHEET.value, (SheetOptions,), "videothumb sheet"),
         Section(Mode.FRAMES.value, (SnapshotOptions,), "videothumb frames"),
+        Section(Mode.PACK.value, (PackOptions,), "videothumb pack"),
         # The output depends on --video or --folder, so it is not a default.
         Section(RUN_SECTION, (RunOptions,), "--folder", skip=("output",)),
         Section(CONSOLE_SECTION, (ConsoleOptions,), "console window and notifications"),

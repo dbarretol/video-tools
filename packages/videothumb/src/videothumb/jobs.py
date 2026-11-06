@@ -18,6 +18,8 @@ from videocore import (
 )
 from videocore.verify import FrameCount, OutputError, check_image
 from videothumb.common import Mode
+from videothumb.pack import SUFFIX as PACK_SUFFIX
+from videothumb.pack import PackCounts, PackOptions, check_pack, default_pack_path, make_pack
 from videothumb.sheet import SheetOptions, default_sheet_path, make_sheet
 from videothumb.snapshots import (
     FOLDER_SUFFIX,
@@ -26,7 +28,7 @@ from videothumb.snapshots import (
     make_snapshots,
 )
 
-Options = SheetOptions | SnapshotOptions
+Options = SheetOptions | SnapshotOptions | PackOptions
 
 # Rough seconds per frame with keyframe sampling, measured on 1080p H.264; precise
 # sampling depends too much on the keyframe interval to estimate.
@@ -116,14 +118,65 @@ class SnapshotsTask:
         return 0.3 + options.count * SECONDS_PER_SNAPSHOT
 
 
-TASKS: dict[Mode, SheetTask | SnapshotsTask] = {
+@dataclass
+class Packed:
+    """What `PackTask.run` returns."""
+
+    output: Path
+    name: str
+    counts: PackCounts = field(default_factory=lambda: PackCounts(FrameCount(), FrameCount()))
+
+
+@dataclass(frozen=True)
+class PackTask:
+    """``videocore.jobs.Task`` that writes one ZIP with the sheet and the frames per video."""
+
+    name: str = "pack"
+
+    def output(self, slot: OutputSlot) -> Path:
+        return slot_output(slot, Mode.PACK)
+
+    def state(self, output: Path, name: str, options: PackOptions) -> Status | None:
+        return Status.SKIPPED if has_output(output, Mode.PACK) else None
+
+    def run(
+        self, video: Path, output: Path, name: str, options: PackOptions, decoders: int | None
+    ) -> Packed:
+        packed = Packed(output, name)
+        make_pack(video, output, options, decoders=decoders, counts=packed.counts, name=name)
+        return packed
+
+    def verify(self, output: Path, value: Packed, options: PackOptions) -> list[str]:
+        check_pack(output, value.name, options, value.counts.frames.decoded)
+        problems = [
+            value.counts.sheet.problem("contact sheet"),
+            value.counts.frames.problem("frames"),
+        ]
+        return [problem for problem in problems if problem]
+
+    def cleanup(self, output: Path) -> None:
+        part_path(output).unlink(missing_ok=True)
+
+    def estimate(self, duration: float, options: PackOptions) -> float | None:
+        if options.sampling == "precise":
+            return None
+        seconds = 0.3 + options.frame_count * SECONDS_PER_SNAPSHOT
+        if options.frame_count != options.cells:  # the sheet is decoded separately
+            seconds += options.cells * SECONDS_PER_SHEET_FRAME
+        return seconds
+
+
+TASKS: dict[Mode, SheetTask | SnapshotsTask | PackTask] = {
     Mode.SHEET: SheetTask(),
     Mode.FRAMES: SnapshotsTask(),
+    Mode.PACK: PackTask(),
 }
 
 
 def default_output(video: Path, mode: Mode) -> Path:
-    """Sheet file or snapshot folder next to the video."""
+    """Sheet file, frames folder or ZIP next to the video."""
+    if mode is Mode.PACK:
+        return default_pack_path(video)
     return default_sheet_path(video) if mode is Mode.SHEET else default_snapshot_dir(video)
 
 
@@ -133,15 +186,20 @@ def batch_output(video: Path, mode: Mode, root: Path | None) -> Path:
 
 
 def slot_output(slot: OutputSlot, mode: Mode) -> Path:
-    """Sheet file or frames folder of a planned slot (see ``videocore.outputs``)."""
+    """Sheet file, frames folder or ZIP of a planned slot (see ``videocore.outputs``)."""
     if mode is Mode.SHEET:
         return slot.folder / f"{slot.name}_sheet.jpg"
+    if mode is Mode.PACK:
+        return slot.folder / f"{slot.name}{PACK_SUFFIX}"
     return slot.folder / f"{slot.name}{FOLDER_SUFFIX}"
 
 
 def process(video: Path, mode: Mode, options: Options, output: Path | None = None) -> Path:
-    """Process one video; return the sheet file or the snapshot folder."""
+    """Process one video; return the sheet file, the frames folder or the ZIP."""
     output = output or default_output(video, mode)
+    if mode is Mode.PACK:
+        assert isinstance(options, PackOptions)
+        return make_pack(video, output, options)
     if mode is Mode.SHEET:
         assert isinstance(options, SheetOptions)
         return make_sheet(video, output, options)
@@ -202,11 +260,11 @@ def _batch_result(item: ItemResult) -> BatchResult:
 
 
 def has_output(output: Path, mode: Mode) -> bool:
-    """A sheet file, or a frames folder holding at least one frame.
+    """A sheet file or ZIP, or a frames folder holding at least one frame.
 
     Files are written under a temporary name and renamed when finished, so an
     existing file is never a truncated one.
     """
-    if mode is Mode.SHEET:
+    if mode in (Mode.SHEET, Mode.PACK):
         return output.is_file()
     return output.is_dir() and any(output.glob("*_f[0-9][0-9][0-9]*.jpg"))
