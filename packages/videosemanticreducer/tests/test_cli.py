@@ -241,3 +241,17 @@ def test_batch_logs_the_plan_first(clip, tmp_path, caplog):
     messages = [r.getMessage() for r in caplog.records]
     plan_line = messages.index("1 video: 1 to process")
     assert plan_line < next(i for i, m in enumerate(messages) if m.startswith("[1/1]"))
+
+
+def test_failures_come_with_a_hint_and_the_log_path(audio_only, clip, tmp_path, caplog):
+    assert main(["process", str(audio_only), "-o", str(tmp_path / "out")]) == 1
+    assert "Hint: it has no video to take frames from" in caplog.text
+    assert "Details: " in caplog.text and "videosemanticreducer" in caplog.text
+
+    caplog.clear()
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    shutil.copy(clip, folder / "good.mp4")
+    (folder / "broken.mp4").write_bytes(b"not a video")
+    assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 1
+    assert "Hint: the file may be damaged" in caplog.text

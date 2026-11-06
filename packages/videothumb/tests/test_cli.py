@@ -245,3 +245,16 @@ def test_keyframe_sampling_falls_back_to_precise(clip, tmp_path, monkeypatch, mo
     monkeypatch.setattr(module, function, spy)
     assert cli.main(["--video", str(clip), "--mode", mode, "-o", str(tmp_path / "out")]) == 0
     assert calls[0]["fallback"] is True and calls[0]["mode"] == "keyframe"
+
+
+def test_failures_come_with_a_hint_and_the_log_path(folder, tmp_path, capsys):
+    broken = folder / "broken.mp4"
+    assert cli.main(["--video", str(broken), "--mode", "sheet"]) == 1
+    err = capsys.readouterr().err
+    assert "Hint: the file may be damaged" in err
+    assert "Details: " in err and "videothumb" in err
+
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
+    err = capsys.readouterr().err
+    assert "  - broken.mp4: VideoOpenError" in err
+    assert "    Hint: the file may be damaged" in err
