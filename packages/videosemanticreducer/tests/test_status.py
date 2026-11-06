@@ -4,10 +4,15 @@ import shutil
 import pytest
 
 from videosemanticreducer.cli import main
-from videosemanticreducer.pipeline import ProcessOptions, process_video
+from videosemanticreducer.pipeline import (
+    ARCHIVE_COMPLETE,
+    ProcessOptions,
+    archive_state,
+    process_video,
+)
 from videosemanticreducer.status import ArchiveStatus, check_archive, find_archives
 
-QUICK = ProcessOptions(summary=False, thumb_cols=2, thumb_rows=2)
+QUICK = ProcessOptions(summary=False, sheet_columns=2, sheet_rows=2)
 
 
 @pytest.fixture
@@ -43,21 +48,21 @@ def test_no_manifest_means_not_archived(videos):
 def test_modified_or_missing_artifacts_are_reported(videos):
     folder = archive(videos / "a.mp4")
     (folder / "a_info.txt").unlink()
-    with (folder / "a_thumb.jpg").open("ab") as thumb:
+    with (folder / "a_sheet.jpg").open("ab") as thumb:
         thumb.write(b"x")
     check = check_archive(folder, "a")
     assert check.status is ArchiveStatus.CHANGED
-    assert check.details == ["a_info.txt is missing", "a_thumb.jpg was modified"]
+    assert check.details == ["a_info.txt is missing", "a_sheet.jpg was modified"]
 
 
 def test_full_compares_hashes(videos):
     folder = archive(videos / "a.mp4")
-    thumb = folder / "a_thumb.jpg"
+    thumb = folder / "a_sheet.jpg"
     data = bytearray(thumb.read_bytes())
     data[-10] ^= 0xFF  # same size, other content
     thumb.write_bytes(bytes(data))
     assert check_archive(folder, "a").status is ArchiveStatus.READY
-    assert check_archive(folder, "a", full=True).details == ["a_thumb.jpg was modified"]
+    assert check_archive(folder, "a", full=True).details == ["a_sheet.jpg was modified"]
 
 
 def test_a_replaced_original_is_not_ready(videos, audio_only):
@@ -128,10 +133,34 @@ def test_cli(videos, capsys):
 def test_cli_finds_archives_where_process_put_them_with_the_config(videos, tmp_path):
     out = tmp_path / "out"
     config = tmp_path / "c.yaml"
-    lines = ["process:", f"  output: {out.as_posix()}", "  summary: false"]
-    lines += ["  thumb_cols: 2", "  thumb_rows: 2"]
+    lines = ["archive:", f"  output: {out.as_posix()}", "  summary: false"]
+    lines += ["  sheet_columns: 2", "  sheet_rows: 2"]
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
     with_config = ["--config", str(config)]
-    assert main(["process", str(videos), "-w", "1", *with_config]) == 0
+    assert main(["archive", str(videos), "-w", "1", *with_config]) == 0
     assert main(["status", str(videos), *with_config]) == 0
     assert main(["status", str(videos)]) == 1  # without it, the archives are not next to them
+
+
+def make_old(folder, name):
+    """Turn an archive into one made before 0.2: `_thumb.jpg` and the old option names."""
+    (folder / f"{name}_sheet.jpg").rename(folder / f"{name}_thumb.jpg")
+    path = folder / f"{name}.archive.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    for output in manifest["outputs"]:
+        output["file"] = output["file"].replace("_sheet.jpg", "_thumb.jpg")
+    options = manifest["options"]
+    options["thumbnail"] = options.pop("sheet")
+    options["thumb_cols"] = options.pop("sheet_columns")
+    options["thumb_rows"] = options.pop("sheet_rows")
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_archives_made_before_the_rename_still_read(videos):
+    folder = archive(videos / "a.mp4")
+    make_old(folder, "a")
+    assert check_archive(folder, "a", videos / "a.mp4", full=True).status is ArchiveStatus.READY
+    assert archive_state(folder, "a", QUICK) == ARCHIVE_COMPLETE  # not outdated: same options
+
+    process_video(videos / "a.mp4", folder, QUICK)  # archived again: the old name goes away
+    assert (folder / "a_sheet.jpg").is_file() and not (folder / "a_thumb.jpg").exists()

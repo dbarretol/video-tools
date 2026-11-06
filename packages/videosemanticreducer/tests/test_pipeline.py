@@ -20,8 +20,8 @@ from videosemanticreducer.pipeline import (
     verify_artifacts,
 )
 
-SMALL = ProcessOptions(num_snapshots=12, thumb_cols=4, thumb_rows=3)
-QUICK = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+SMALL = ProcessOptions(num_snapshots=12, sheet_columns=4, sheet_rows=3)
+QUICK = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
 
 
 def archive(videos, output=None, options=SMALL, *, overwrite=False, **kwargs):
@@ -41,11 +41,11 @@ def test_process_creates_every_artifact(clip, tmp_path):
     assert names == [
         "clip.fingerprint.json",
         "clip_info.txt",
+        "clip_sheet.jpg",
         "clip_summary.mp4",
-        "clip_thumb.jpg",
     ]
     assert all(p.is_file() and p.parent == tmp_path / "out" for p in result.outputs)
-    assert {"probe", "snapshots", "thumbnail", "global_hashes", "total"} <= result.timings.keys()
+    assert {"probe", "snapshots", "sheet", "global_hashes", "total"} <= result.timings.keys()
 
 
 def test_manifest_records_a_complete_archive(clip, tmp_path):
@@ -62,8 +62,8 @@ def test_manifest_records_a_complete_archive(clip, tmp_path):
     assert "sampling_workers" not in manifest["options"]
     listed = {entry["file"]: entry for entry in manifest["outputs"]}
     assert sorted(listed) == sorted(p.name for p in result.outputs)
-    thumb = tmp_path / "out" / "clip_thumb.jpg"
-    assert listed["clip_thumb.jpg"]["size_bytes"] == thumb.stat().st_size
+    thumb = tmp_path / "out" / "clip_sheet.jpg"
+    assert listed["clip_sheet.jpg"]["size_bytes"] == thumb.stat().st_size
     assert is_complete(result.manifest)
 
 
@@ -71,7 +71,7 @@ def test_manifest_records_a_failed_archive(clip, tmp_path, monkeypatch):
     from videosemanticreducer import fingerprint
 
     monkeypatch.setattr(fingerprint, "compute_global_hashes", lambda info, **kwargs: None)
-    options = ProcessOptions(summary=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, sheet_columns=2, sheet_rows=2)
 
     with pytest.raises(fingerprint.IncompleteFingerprintError):
         process_video(clip, tmp_path, options)
@@ -79,14 +79,14 @@ def test_manifest_records_a_failed_archive(clip, tmp_path, monkeypatch):
     manifest = read_manifest(tmp_path / "clip.archive.json")
     assert manifest["complete"] is False
     assert manifest["error"].startswith("IncompleteFingerprintError")
-    assert [entry["file"] for entry in manifest["outputs"]] == ["clip_info.txt", "clip_thumb.jpg"]
+    assert [entry["file"] for entry in manifest["outputs"]] == ["clip_info.txt", "clip_sheet.jpg"]
     assert not is_complete(tmp_path / "clip.archive.json")
 
 
 def test_rerun_replaces_the_previous_manifest(clip, tmp_path, monkeypatch):
     from videosemanticreducer import pipeline
 
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
     process_video(clip, tmp_path, options)
     assert is_complete(tmp_path / "clip.archive.json")
 
@@ -100,12 +100,12 @@ def test_rerun_replaces_the_previous_manifest(clip, tmp_path, monkeypatch):
 
 
 def test_manifest_is_incomplete_when_an_output_changes(clip, tmp_path):
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
     result = process_video(clip, tmp_path, options)
 
-    (tmp_path / "clip_thumb.jpg").write_bytes(b"truncated")
+    (tmp_path / "clip_sheet.jpg").write_bytes(b"truncated")
     assert not is_complete(result.manifest)
-    (tmp_path / "clip_thumb.jpg").unlink()
+    (tmp_path / "clip_sheet.jpg").unlink()
     assert not is_complete(result.manifest)
 
 
@@ -119,7 +119,7 @@ def test_is_complete_tolerates_bad_manifests(tmp_path):
 
 def test_leftover_part_files_are_removed(clip, tmp_path):
     (tmp_path / "clip_summary.mp4.part").write_bytes(b"killed run")
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
     process_video(clip, tmp_path, options)
     assert not list(tmp_path.glob("*.part"))
 
@@ -139,19 +139,19 @@ def test_batch_removes_part_files_of_cancelled_videos(clip, tmp_path):
 
 
 def test_archive_state(clip, tmp_path):
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
     assert archive_state(tmp_path, "clip", options) is None
     process_video(clip, tmp_path, options)
 
     assert archive_state(tmp_path, "clip", options) == "complete"
-    other_grid = ProcessOptions(summary=False, fingerprint=False, thumb_cols=3, thumb_rows=2)
+    other_grid = ProcessOptions(summary=False, fingerprint=False, sheet_columns=3, sheet_rows=2)
     assert archive_state(tmp_path, "clip", other_grid) == "outdated"
     # Fewer artifacts than were made is still complete; more is not.
     only_report = ProcessOptions(
-        summary=False, thumbnail=False, fingerprint=False, thumb_cols=2, thumb_rows=2
+        summary=False, sheet=False, fingerprint=False, sheet_columns=2, sheet_rows=2
     )
     assert archive_state(tmp_path, "clip", only_report) == "complete"
-    with_fingerprint = ProcessOptions(summary=False, thumb_cols=2, thumb_rows=2)
+    with_fingerprint = ProcessOptions(summary=False, sheet_columns=2, sheet_rows=2)
     assert archive_state(tmp_path, "clip", with_fingerprint) is None
 
 
@@ -159,7 +159,7 @@ def test_batch_skips_complete_archives(clip, tmp_path):
     videos = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
     for video in videos:
         video.write_bytes(clip.read_bytes())
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
     process_video(videos[0], tmp_path / "a_summary", options)
     progress = []
 
@@ -179,7 +179,7 @@ def test_batch_reports_archives_made_with_other_settings(clip, tmp_path):
     video = tmp_path / "a.mp4"
     video.write_bytes(clip.read_bytes())
     process_video(video, tmp_path / "a_summary", QUICK)
-    other = ProcessOptions(summary=False, fingerprint=False, thumb_cols=3, thumb_rows=2)
+    other = ProcessOptions(summary=False, fingerprint=False, sheet_columns=3, sheet_rows=2)
 
     report = archive([video], options=other)
 
@@ -192,27 +192,27 @@ def test_summary_has_info_card_then_one_frame_per_snapshot(clip, tmp_path):
     assert video_frame_count(tmp_path / "clip_summary.mp4") == card_frames + 12
 
 
-def test_thumbnail_grid_size(clip, tmp_path):
+def test_sheet_size(clip, tmp_path):
     process_video(clip, tmp_path, SMALL)
-    with Image.open(tmp_path / "clip_thumb.jpg") as grid:
+    with Image.open(tmp_path / "clip_sheet.jpg") as grid:
         # 160x90 is below the 240 px thumbnail size, so cells keep the native size.
         assert grid.size == (4 * 160, 3 * 90)
 
 
 def test_grid_sampled_separately_when_there_are_few_snapshots(clip, tmp_path):
-    options = ProcessOptions(num_snapshots=5, thumb_cols=4, thumb_rows=3)
+    options = ProcessOptions(num_snapshots=5, sheet_columns=4, sheet_rows=3)
     result = process_video(clip, tmp_path, options)
-    assert tmp_path / "clip_thumb.jpg" in result.outputs
+    assert tmp_path / "clip_sheet.jpg" in result.outputs
 
 
 def test_options_skip_artifacts(clip, tmp_path):
-    options = ProcessOptions(summary=False, thumbnail=True, fingerprint=False, **_small_grid())
+    options = ProcessOptions(summary=False, sheet=True, fingerprint=False, **_small_grid())
     result = process_video(clip, tmp_path, options)
-    assert sorted(p.name for p in result.outputs) == ["clip_info.txt", "clip_thumb.jpg"]
+    assert sorted(p.name for p in result.outputs) == ["clip_info.txt", "clip_sheet.jpg"]
 
 
 def test_only_metadata(clip, tmp_path):
-    options = ProcessOptions(summary=False, thumbnail=False, fingerprint=False)
+    options = ProcessOptions(summary=False, sheet=False, fingerprint=False)
     result = process_video(clip, tmp_path, options)
     assert [p.name for p in result.outputs] == ["clip_info.txt"]
     assert "snapshots" not in result.timings
@@ -228,14 +228,14 @@ def test_incomplete_fingerprint_fails_and_is_not_written(clip, tmp_path, monkeyp
     from videosemanticreducer import fingerprint
 
     monkeypatch.setattr(fingerprint, "compute_global_hashes", lambda info, **kwargs: None)
-    options = ProcessOptions(summary=False, thumbnail=False)
+    options = ProcessOptions(summary=False, sheet=False)
 
     with pytest.raises(fingerprint.IncompleteFingerprintError):
         process_video(clip, tmp_path, options)
     assert not (tmp_path / "clip.fingerprint.json").exists()
 
 
-def test_partial_thumbnail_grid_is_logged(clip, tmp_path, monkeypatch, caplog):
+def test_partial_sheet_is_logged(clip, tmp_path, monkeypatch, caplog):
     from videosemanticreducer import pipeline
 
     real = pipeline.sample_frames
@@ -245,7 +245,7 @@ def test_partial_thumbnail_grid_is_logged(clip, tmp_path, monkeypatch, caplog):
         return [None, *frames[1:]]
 
     monkeypatch.setattr(pipeline, "sample_frames", lose_first_frame)
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
 
     process_video(clip, tmp_path, options)
 
@@ -280,14 +280,14 @@ def test_process_batch_isolates_failures(clip, tmp_path):
     good, broken = tmp_path / "good.mp4", tmp_path / "broken.mp4"
     good.write_bytes(clip.read_bytes())
     broken.write_bytes(b"not a video")
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
 
     report = archive([good, broken], tmp_path / "out", options)
 
     ok, failed = report.items
     assert ok.status is Status.OK and ok.output == tmp_path / "out" / "good_summary"
     assert ok.value.timings["total"] > 0
-    assert (tmp_path / "out" / "good_summary" / "good_thumb.jpg").is_file()
+    assert (tmp_path / "out" / "good_summary" / "good_sheet.jpg").is_file()
     assert failed.status is Status.FAILED and failed.error_type
     assert report.failed == [failed] and report.exit_code == 1
 
@@ -295,7 +295,7 @@ def test_process_batch_isolates_failures(clip, tmp_path):
 def test_batch_videos_sharing_a_stem_get_separate_folders(clip, tmp_path):
     for name in ("clip.mp4", "clip.mkv"):
         (tmp_path / name).write_bytes(clip.read_bytes())
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
 
     report = archive([tmp_path / "clip.mkv", tmp_path / "clip.mp4"], options=options)
 
@@ -303,7 +303,7 @@ def test_batch_videos_sharing_a_stem_get_separate_folders(clip, tmp_path):
         tmp_path / "clip.mkv_summary",
         tmp_path / "clip.mp4_summary",
     ]
-    assert (tmp_path / "clip.mp4_summary" / "clip.mp4_thumb.jpg").is_file()
+    assert (tmp_path / "clip.mp4_summary" / "clip.mp4_sheet.jpg").is_file()
     assert (tmp_path / "clip.mkv_summary" / "clip.mkv_info.txt").is_file()
     assert is_output_dir(tmp_path / "clip.mp4_summary")
 
@@ -313,7 +313,7 @@ def test_batch_recreates_subfolders_in_the_output(clip, tmp_path):
     for sub in ("x", "y"):
         (source / sub).mkdir(parents=True)
         (source / sub / "clip.mp4").write_bytes(clip.read_bytes())
-    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    options = ProcessOptions(summary=False, fingerprint=False, sheet_columns=2, sheet_rows=2)
     videos = [source / "x" / "clip.mp4", source / "y" / "clip.mp4"]
 
     report = archive(videos, out, options, source=source)
@@ -354,7 +354,7 @@ def test_grid_sources_cover_every_cell_once():
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"num_snapshots": 0}, {"snap_duration": 0}, {"thumb_cols": 0}, {"thumb_rows": -1}],
+    [{"num_snapshots": 0}, {"snap_duration": 0}, {"sheet_columns": 0}, {"sheet_rows": -1}],
 )
 def test_invalid_options(kwargs):
     with pytest.raises(ValueError):
@@ -362,7 +362,7 @@ def test_invalid_options(kwargs):
 
 
 def _small_grid():
-    return {"thumb_cols": 2, "thumb_rows": 2}
+    return {"sheet_columns": 2, "sheet_rows": 2}
 
 
 def test_archive_reports_its_stages(clip, tmp_path):
@@ -371,7 +371,7 @@ def test_archive_reports_its_stages(clip, tmp_path):
 
     assert report.items[0].status is Status.OK
     stages = list(dict.fromkeys(e.stage for e in events if e.kind == "stage"))
-    for expected in ("probe", "snapshots", "thumbnail", "global_hashes", "keyframe_hashes"):
+    for expected in ("probe", "snapshots", "sheet", "global_hashes", "keyframe_hashes"):
         assert expected in stages
     assert stages.index("probe") < stages.index("snapshots") < stages.index("global_hashes")
     assert stages[-1] == "manifest"
@@ -414,7 +414,7 @@ def test_incomplete_grid_makes_a_degraded_archive_that_is_redone(clip, tmp_path,
 
     (result,) = report.items
     assert result.status is Status.DEGRADED
-    assert result.problems == ["thumbnail grid: only 1/4 frames could be decoded"]
+    assert result.problems == ["contact sheet: only 1/4 frames could be decoded"]
     assert report.exit_code == 3
     manifest = read_manifest(tmp_path / "out" / "clip_summary" / "clip.archive.json")
     assert manifest["complete"] is False and manifest["problems"] == result.problems
@@ -431,8 +431,8 @@ def test_artifacts_are_read_back(clip, tmp_path):
     with pytest.raises(OutputError, match="clip_summary.mp4 is not a readable video"):
         verify_artifacts(result, SMALL)
 
-    result.thumb_size = (1, 1)
-    result.outputs = [p for p in result.outputs if p.name.endswith("_thumb.jpg")]
+    result.sheet_size = (1, 1)
+    result.outputs = [p for p in result.outputs if p.name.endswith("_sheet.jpg")]
     with pytest.raises(OutputError, match="expected 1x1"):
         verify_artifacts(result, SMALL)
 

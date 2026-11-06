@@ -195,3 +195,7 @@ def test_json_document(planned, tmp_path, capsys):
     plain = Console()
     plain.record(anything=1)
     assert plain.finish(0) == 0 and capsys.readouterr().out == ""
+
+
+def test_no_progress_turns_off_the_live_display():
+    assert Console(progress=False).live is False

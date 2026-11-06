@@ -411,3 +411,9 @@ def test_invalid_arguments_pause_when_launched_alone(monkeypatch):
     with pytest.raises(SystemExit):
         cli.main(["sheet", "--bogus"])
     assert paused == [True]
+
+
+def test_no_progress_is_accepted(clip, tmp_path):
+    out = tmp_path / "s.jpg"
+    assert cli.main(["sheet", str(clip), "-o", str(out), "--no-progress"]) == 0
+    assert out.is_file()
