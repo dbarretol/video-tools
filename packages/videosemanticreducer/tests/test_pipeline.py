@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 from videocore import RunOptions, Status, run_task
+from videocore.verify import OutputError
 from videosemanticreducer.manifest import is_complete, read_manifest
 from videosemanticreducer.pipeline import (
     ARCHIVE,
@@ -16,6 +17,7 @@ from videosemanticreducer.pipeline import (
     process_video,
     resolve_output_dir,
     snapshot_timestamps,
+    verify_artifacts,
 )
 
 SMALL = ProcessOptions(num_snapshots=12, thumb_cols=4, thumb_rows=3)
@@ -396,3 +398,54 @@ def test_cancelled_archive_leaves_no_partial_or_complete_record(clip, tmp_path, 
     assert not list(folder.glob("*.part"))
     assert not (folder / "clip_summary.mp4").exists()
     assert not (folder / "clip.archive.json").exists()  # never looks archived
+
+
+def test_incomplete_grid_makes_a_degraded_archive_that_is_redone(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import pipeline
+
+    real = pipeline.sample_frames
+
+    def lose_frames(*args, **kwargs):
+        frames = real(*args, **kwargs)
+        return [frames[0], *[None] * (len(frames) - 1)]
+
+    monkeypatch.setattr(pipeline, "sample_frames", lose_frames)
+    report = archive([clip], tmp_path / "out", QUICK)
+
+    (result,) = report.items
+    assert result.status is Status.DEGRADED
+    assert result.problems == ["thumbnail grid: only 1/4 frames could be decoded"]
+    assert report.exit_code == 3
+    manifest = read_manifest(tmp_path / "out" / "clip_summary" / "clip.archive.json")
+    assert manifest["complete"] is False and manifest["problems"] == result.problems
+    # Not complete, so the next run archives it again instead of skipping it.
+    assert archive_state(tmp_path / "out" / "clip_summary", "clip", QUICK) is None
+
+
+def test_artifacts_are_read_back(clip, tmp_path):
+    result = process_video(clip, tmp_path, SMALL)
+    assert result.problems == []
+    assert verify_artifacts(result, SMALL) == []
+
+    (tmp_path / "clip_summary.mp4").write_bytes(b"not a video any more")
+    with pytest.raises(OutputError, match="clip_summary.mp4 is not a readable video"):
+        verify_artifacts(result, SMALL)
+
+    result.thumb_size = (1, 1)
+    result.outputs = [p for p in result.outputs if p.name.endswith("_thumb.jpg")]
+    with pytest.raises(OutputError, match="expected 1x1"):
+        verify_artifacts(result, SMALL)
+
+
+def test_an_unreadable_artifact_fails_the_archive(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import pipeline
+
+    def broken(path, duration=None):
+        raise OutputError(f"{path.name} lasts 0.0 s, expected about {duration:.1f} s")
+
+    monkeypatch.setattr(pipeline, "check_video", broken)
+    report = archive([clip], tmp_path / "out", SMALL)
+    assert report.items[0].status is Status.FAILED
+    assert "clip_summary.mp4 lasts 0.0 s, expected about" in report.items[0].error
+    manifest = read_manifest(tmp_path / "out" / "clip_summary" / "clip.archive.json")
+    assert manifest["complete"] is False and "OutputError" in manifest["error"]

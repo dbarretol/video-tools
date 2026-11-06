@@ -40,6 +40,13 @@ class FakeTask:
         output.write_text(options.text, encoding="utf-8")
         return decoders
 
+    def verify(self, output: Path, value, options: Options) -> list[str]:
+        if output.name.startswith("thin"):
+            return ["only 1/10 frames"]
+        if output.name.startswith("lost"):
+            raise OSError(f"{output.name} was not written")
+        return []
+
     def cleanup(self, output: Path) -> None:
         self.cleaned.append(output)
 
@@ -233,3 +240,25 @@ def test_items_stopped_from_inside_are_cancelled(videos):
     )
     assert [r.status for r in report.items] == [Status.CANCELLED] * 3
     assert [e.item for e in events] == [videos[0]]  # the others never started
+
+
+def test_outputs_are_verified_after_each_video(tmp_path):
+    paths = [tmp_path / name for name in ("ok.mp4", "thin.mp4", "lost.mp4")]
+    for path in paths:
+        path.write_bytes(b"x")
+    report = execute(plan(FakeTask(), paths, Options(), RunOptions(workers=1), measure=False))
+
+    assert [r.status for r in report.items] == [Status.OK, Status.DEGRADED, Status.FAILED]
+    assert report.items[1].problems == ["only 1/10 frames"] and report.items[1].ok
+    assert "lost.txt was not written" in report.items[2].error
+    assert report.degraded == [report.items[1]]
+    assert report.exit_code == 1
+
+
+def test_degraded_runs_exit_with_3_or_1_when_strict(tmp_path):
+    path = tmp_path / "thin.mp4"
+    path.write_bytes(b"x")
+    report = execute(plan(FakeTask(), [path], Options(), measure=False))
+    assert report.items[0].status is Status.DEGRADED
+    assert report.exit_code == 3
+    assert report.exit_status(strict=True) == 1

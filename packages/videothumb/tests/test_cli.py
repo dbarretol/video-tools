@@ -183,3 +183,47 @@ def test_batch_prints_the_plan_first(folder, capsys):
     assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
     out = capsys.readouterr().out
     assert out.index("3 videos: 3 to process") < out.index("[1/3]")
+
+
+def lose_frames(monkeypatch, keep):
+    from videothumb import sheet
+
+    real = sheet.sample_frames
+
+    def partial(*args, **kwargs):
+        frames = real(*args, **kwargs)
+        return [frame if i < keep else None for i, frame in enumerate(frames)]
+
+    monkeypatch.setattr(sheet, "sample_frames", partial)
+
+
+def test_incomplete_sheet_is_degraded_and_exits_with_3(clip, tmp_path, monkeypatch, capsys):
+    lose_frames(monkeypatch, keep=10)
+    args = ["--video", str(clip), "--mode", "sheet", "-o", str(tmp_path / "s.jpg")]
+    assert cli.main(args) == 3
+    err = capsys.readouterr().err
+    assert "incomplete output: contact sheet: only 10/20 frames could be decoded" in err
+    assert cli.main([*args, "--strict"]) == 1
+
+
+def test_batch_reports_incomplete_outputs(folder, monkeypatch, capsys):
+    lose_frames(monkeypatch, keep=1)
+    (folder / "broken.mp4").unlink()
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 3
+    captured = capsys.readouterr()
+    assert "a.mp4: DEGRADED" in captured.out
+    assert "Done: 0 succeeded, 2 incomplete, 0 failed." in captured.out
+    assert "a.mp4: incomplete: contact sheet: only 1/20" in captured.err
+
+
+def test_sheet_of_the_wrong_size_fails(clip, tmp_path):
+    from PIL import Image
+
+    from videocore.verify import FrameCount, OutputError
+    from videothumb.jobs import Produced, SheetTask
+    from videothumb.sheet import SheetOptions
+
+    path = tmp_path / "s.jpg"
+    Image.new("RGB", (100, 100)).save(path)
+    with pytest.raises(OutputError, match="100 pixels wide, expected 1600"):
+        SheetTask().verify(path, Produced(path, FrameCount(20, 20)), SheetOptions())
