@@ -46,6 +46,7 @@ from videosemanticreducer.pipeline import (
     is_output_dir,
     resolve_output_dir,
 )
+from videosemanticreducer.status import ArchiveStatus, find_archives
 
 APP_NAME = "videosemanticreducer"
 
@@ -158,13 +159,43 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("video", type=Path)
     verify.add_argument("fingerprint", type=Path)
     verify.set_defaults(handler=cmd_verify)
+
+    status = commands.add_parser(
+        "status",
+        parents=[config_option],
+        help="check that archives are complete and unchanged, before deleting originals",
+        description=(
+            "Check archives made by `process`: the manifest says they are complete, every "
+            "artifact is still there and unchanged, and the original, if still present, is "
+            "the video that was archived."
+        ),
+        epilog="Exit code: 0 every archive is ready (originals can be deleted), 1 otherwise.",
+    )
+    status.add_argument(
+        "paths", nargs="+", type=Path, metavar="PATH", help="video, archive folder or folder"
+    )
+    status.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        metavar="PATH",
+        help="the output folder given to `process`, if any (default: from the config file)",
+    )
+    status.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
+    status.add_argument(
+        "--full",
+        action="store_true",
+        help="also compare the SHA-256 of every file instead of only sizes (reads everything)",
+    )
+    status.set_defaults(handler=cmd_status)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run the command line; return the exit code.
 
-    0 success, 1 a video failed (or `verify`/`compare` found no match),
+    0 success, 1 a video failed (or `verify`/`compare` found no match, or `status`
+    found an archive that is not ready), 3 some outputs are incomplete (DEGRADED),
     2 invalid arguments, inputs or config, 130 interrupted with Ctrl+C.
     """
     parser = build_parser()
@@ -372,6 +403,37 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print(f"  >>> {verdict}")
     print("=" * 60)
     return EXIT_OK if report.is_match else EXIT_FAILED
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    output = args.output
+    if output is None:
+        output = load_config(find_config(args.config)).run.output
+    checks = []
+    for path in args.paths:
+        if not path.exists():
+            raise UsageError(f"Not found: {path}")
+        checks += find_archives(path, output=output, recursive=args.recursive, full=args.full)
+    if not checks:
+        print("No videos or archives found")
+        return EXIT_FAILED
+
+    width = max(len(status.value) for status in ArchiveStatus)
+    for check in checks:
+        print(f"{check.status.upper():<{width}}  {check.label}")
+        for detail in check.details:
+            print(f"{'':<{width}}    {detail}")
+    counts = [(status, sum(c.status is status for c in checks)) for status in ArchiveStatus]
+    parts = [
+        f"{count} {'ready to delete' if status is ArchiveStatus.READY else status.value}"
+        for status, count in counts
+        if count
+    ]
+    print(f"{len(checks)} checked: " + ", ".join(parts))
+    if not args.full and counts[0][1]:
+        print("Only sizes were compared; use --full to also compare SHA-256 hashes.")
+    ready = all(check.status is ArchiveStatus.READY for check in checks)
+    return EXIT_OK if ready else EXIT_FAILED
 
 
 def print_comparison(title: str, files: list[tuple[str, object]], report: Comparison) -> None:
