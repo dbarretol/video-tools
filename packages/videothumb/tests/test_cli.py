@@ -139,7 +139,7 @@ def test_ctrl_c_exits_with_130(clip, monkeypatch, capsys):
     def interrupted(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli, "process", interrupted)
+    monkeypatch.setattr("videothumb.jobs.make_sheet", interrupted)
     assert cli.main(["--video", str(clip), "--mode", "sheet"]) == 130
     assert "Interrupted" in capsys.readouterr().err
 
@@ -167,3 +167,19 @@ def test_options_share_one_declaration():
     assert cli.build_options(
         cli.build_parser().parse_args(["--video", "x", "--mode", "sheet"])
     ) == (SheetOptions())
+
+
+def test_dry_run_lists_what_would_happen(folder, capsys):
+    (folder / "a_sheet.jpg").write_bytes(b"from an earlier run")
+    args = ["--folder", str(folder), "--mode", "sheet", "--skip-existing", "--dry-run"]
+    assert cli.main(args) == 0
+    out = capsys.readouterr().out
+    assert "3 videos: 2 to process, 1 already done" in out
+    assert "[skip, already done] a.mp4 -> a_sheet.jpg" in out
+    assert not (folder / "b_sheet.jpg").exists()
+
+
+def test_batch_prints_the_plan_first(folder, capsys):
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
+    out = capsys.readouterr().out
+    assert out.index("3 videos: 3 to process") < out.index("[1/3]")

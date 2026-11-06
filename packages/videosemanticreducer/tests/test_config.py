@@ -3,12 +3,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from videocore import RunOptions
 from videosemanticreducer.cli import main
 from videosemanticreducer.config import (
     CONFIG_ENV,
     ConfigError,
     ProcessDefaults,
-    RunDefaults,
     default_config_path,
     find_config,
     load_config,
@@ -143,10 +143,10 @@ def test_process_with_out_of_range_config_values_is_a_usage_error(clip, tmp_path
 def test_template_lists_every_option_once():
     keys = yaml.safe_load(render_template())["process"]
     expected = [f.name for f in ProcessOptions.__dataclass_fields__.values() if f.metadata]
-    assert list(keys) == expected + ["output", "workers", "recursive"]
+    assert list(keys) == expected + ["output", "recursive", "workers"]
     assert "# videos processed in parallel for folders; null = automatic" in render_template()
 
 
 def test_run_defaults_are_validated():
     with pytest.raises(ValueError, match="workers must be greater than 0"):
-        RunDefaults(workers=0)
+        RunOptions(workers=0)

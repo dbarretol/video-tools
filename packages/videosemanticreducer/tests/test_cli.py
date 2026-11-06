@@ -153,7 +153,7 @@ def test_ctrl_c_exits_with_130(clip, tmp_path, monkeypatch):
     def interrupted(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("videosemanticreducer.cli.process_video", interrupted)
+    monkeypatch.setattr("videosemanticreducer.pipeline.process_video", interrupted)
     assert main(["process", str(clip), "-o", str(tmp_path / "out")]) == 130
 
 
@@ -201,3 +201,43 @@ def test_compare_invalid_fingerprint(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{}", encoding="utf-8")
     assert main(["compare", str(bad), str(bad)]) == 2
+
+
+def test_dry_run_writes_nothing(clip, tmp_path, capsys):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    for name in ("a.mp4", "b.mp4"):
+        shutil.copy(clip, folder / name)
+    args = ["process", str(folder), "-w", "1", "--no-video", *FAST]
+    assert main([*args, "--no-fingerprint"]) == 0  # a is archived without the fingerprint...
+    shutil.rmtree(folder / "b_summary")
+    capsys.readouterr()
+
+    assert main([*args, "--no-fingerprint", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "2 videos: 1 to process, 1 already done" in out
+    assert "[process] b.mp4 -> b_summary" in out
+    assert not (folder / "b_summary").exists()
+
+    # ...so asking for it now makes a pending again.
+    assert main([*args, "--dry-run"]) == 0
+    assert "2 videos: 2 to process" in capsys.readouterr().out
+
+
+def test_dry_run_of_one_video(clip, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["process", str(clip), "-o", str(out), "--dry-run"]) == 0
+    text = capsys.readouterr().out
+    assert "1 video: 1 to process" in text and "estimated time" in text
+    assert not out.exists()
+
+
+def test_batch_logs_the_plan_first(clip, tmp_path, caplog):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    shutil.copy(clip, folder / "a.mp4")
+    caplog.set_level(logging.INFO)
+    assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 0
+    messages = [r.getMessage() for r in caplog.records]
+    plan_line = messages.index("1 video: 1 to process")
+    assert plan_line < next(i for i, m in enumerate(messages) if m.startswith("[1/1]"))

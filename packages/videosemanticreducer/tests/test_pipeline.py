@@ -4,20 +4,27 @@ import av
 import pytest
 from PIL import Image
 
+from videocore import RunOptions, Status, run_task
 from videosemanticreducer.manifest import is_complete, read_manifest
 from videosemanticreducer.pipeline import (
+    ARCHIVE,
     INFO_CARD_DURATION,
     ProcessOptions,
     _grid_sources,
     archive_state,
     is_output_dir,
-    process_batch,
     process_video,
     resolve_output_dir,
     snapshot_timestamps,
 )
 
 SMALL = ProcessOptions(num_snapshots=12, thumb_cols=4, thumb_rows=3)
+QUICK = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+
+
+def archive(videos, output=None, options=SMALL, *, overwrite=False, **kwargs):
+    run = RunOptions(output=output, workers=1, overwrite=overwrite)
+    return run_task(ARCHIVE, videos, options, run, **kwargs)
 
 
 def video_frame_count(path: Path) -> int:
@@ -123,9 +130,9 @@ def test_batch_removes_part_files_of_cancelled_videos(clip, tmp_path):
     leftover.parent.mkdir()
     leftover.write_bytes(b"killed worker")
 
-    results = process_batch(videos, None, SMALL, workers=1, should_cancel=lambda: True)
+    report = archive(videos, should_cancel=lambda: True)
 
-    assert results == []
+    assert [r.status for r in report.items] == [Status.CANCELLED, Status.CANCELLED]
     assert not leftover.exists()
 
 
@@ -154,20 +161,27 @@ def test_batch_skips_complete_archives(clip, tmp_path):
     process_video(videos[0], tmp_path / "a_summary", options)
     progress = []
 
-    results = process_batch(
-        videos,
-        None,
-        options,
-        skip_complete=True,
-        workers=1,
-        on_progress=lambda done, total, r: progress.append((done, total)),
+    report = archive(
+        videos, options=options, on_progress=lambda done, total, r: progress.append((done, total))
     )
 
-    assert [(r.item.name, r.skipped, r.detail) for r in results] == [
-        ("a.mp4", True, "complete"),
-        ("b.mp4", False, None),
+    assert [(r.video.name, r.status) for r in report.items] == [
+        ("a.mp4", Status.SKIPPED),
+        ("b.mp4", Status.OK),
     ]
     assert progress == [(1, 1)]
+    assert archive(videos, options=options, overwrite=True).count(Status.OK) == 2
+
+
+def test_batch_reports_archives_made_with_other_settings(clip, tmp_path):
+    video = tmp_path / "a.mp4"
+    video.write_bytes(clip.read_bytes())
+    process_video(video, tmp_path / "a_summary", QUICK)
+    other = ProcessOptions(summary=False, fingerprint=False, thumb_cols=3, thumb_rows=2)
+
+    report = archive([video], options=other)
+
+    assert report.items[0].status is Status.OUTDATED and report.items[0].ok
 
 
 def test_summary_has_info_card_then_one_frame_per_snapshot(clip, tmp_path):
@@ -266,11 +280,14 @@ def test_process_batch_isolates_failures(clip, tmp_path):
     broken.write_bytes(b"not a video")
     options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
 
-    results = process_batch([good, broken], tmp_path / "out", options, workers=1)
+    report = archive([good, broken], tmp_path / "out", options)
 
-    assert results[0].ok and results[0].value == tmp_path / "out" / "good_summary"
+    ok, failed = report.items
+    assert ok.status is Status.OK and ok.output == tmp_path / "out" / "good_summary"
+    assert ok.value.timings["total"] > 0
     assert (tmp_path / "out" / "good_summary" / "good_thumb.jpg").is_file()
-    assert not results[1].ok
+    assert failed.status is Status.FAILED and failed.error_type
+    assert report.failed == [failed] and report.exit_code == 1
 
 
 def test_batch_videos_sharing_a_stem_get_separate_folders(clip, tmp_path):
@@ -278,11 +295,9 @@ def test_batch_videos_sharing_a_stem_get_separate_folders(clip, tmp_path):
         (tmp_path / name).write_bytes(clip.read_bytes())
     options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
 
-    results = process_batch(
-        [tmp_path / "clip.mkv", tmp_path / "clip.mp4"], None, options, workers=1
-    )
+    report = archive([tmp_path / "clip.mkv", tmp_path / "clip.mp4"], options=options)
 
-    assert [r.value for r in results] == [
+    assert [r.output for r in report.items] == [
         tmp_path / "clip.mkv_summary",
         tmp_path / "clip.mp4_summary",
     ]
@@ -299,9 +314,12 @@ def test_batch_recreates_subfolders_in_the_output(clip, tmp_path):
     options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
     videos = [source / "x" / "clip.mp4", source / "y" / "clip.mp4"]
 
-    results = process_batch(videos, out, options, source=source, workers=1)
+    report = archive(videos, out, options, source=source)
 
-    assert [r.value for r in results] == [out / "x" / "clip_summary", out / "y" / "clip_summary"]
+    assert [r.output for r in report.items] == [
+        out / "x" / "clip_summary",
+        out / "y" / "clip_summary",
+    ]
 
 
 def test_batch_collision_fails_before_processing(clip, tmp_path):
@@ -309,7 +327,7 @@ def test_batch_collision_fails_before_processing(clip, tmp_path):
 
     videos = [tmp_path / "x" / "clip.mp4", tmp_path / "y" / "clip.mp4"]
     with pytest.raises(OutputCollisionError):
-        process_batch(videos, tmp_path / "out", workers=1)
+        archive(videos, tmp_path / "out")
     assert not (tmp_path / "out").exists()
 
 
