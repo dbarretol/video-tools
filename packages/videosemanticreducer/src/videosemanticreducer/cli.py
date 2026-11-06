@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import logging
-import os
 from pathlib import Path
 
 from videocore import (
@@ -17,6 +16,7 @@ from videocore import (
     Plan,
     ProgressEvent,
     RunOptions,
+    State,
     Status,
     UsageError,
     configure_logging,
@@ -25,17 +25,15 @@ from videocore import (
     plan,
     probe,
 )
+from videocore.config import add_config_commands
 from videocore.options import add_arguments, given_values
 from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
 from videosemanticreducer.config import (
-    CONFIG_ENV,
-    ConfigError,
+    CONFIG,
     ProcessDefaults,
-    default_config_path,
     find_config,
     load_config,
-    render_template,
     split_values,
 )
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
@@ -84,13 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="show debug messages",
     )
 
-    config_option = argparse.ArgumentParser(add_help=False, parents=[common])
-    config_option.add_argument(
-        "--config",
-        type=Path,
-        metavar="FILE",
-        help=f"YAML file with defaults (default: ${CONFIG_ENV} or {default_config_path()})",
-    )
+    config_option = argparse.ArgumentParser(add_help=False, parents=[common, CONFIG.file_option()])
 
     # Option defaults are None so that values from the config file apply unless a flag is given.
     process = commands.add_parser(
@@ -119,21 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process.set_defaults(handler=cmd_process, overwrite=False)
 
-    config = commands.add_parser("config", help="manage the defaults file of `process`")
-    actions = config.add_subparsers(dest="action", metavar="ACTION", required=True)
-    init = actions.add_parser(
-        "init", parents=[config_option], help="write a commented config file to edit"
+    config = commands.add_parser(
+        "config",
+        help="manage the defaults file of `process`",
+        description=(
+            "Manage the defaults file of `process`. Keys are option names, "
+            "e.g. `config set snapshot_fps 2`."
+        ),
     )
-    init.add_argument("--force", action="store_true", help="overwrite an existing file")
-    init.set_defaults(handler=cmd_config_init)
-    show = actions.add_parser(
-        "show", parents=[config_option], help="print the defaults in effect and their source"
-    )
-    show.set_defaults(handler=cmd_config_show)
-    path = actions.add_parser(
-        "path", parents=[common], help="print where the config file is looked up"
-    )
-    path.set_defaults(handler=cmd_config_path)
+    add_config_commands(config, CONFIG, parents=[common])
 
     fingerprint = commands.add_parser(
         "fingerprint", parents=[common], help="only compute a video's fingerprint"
@@ -212,10 +198,13 @@ def cmd_process(args: argparse.Namespace) -> int:
     settings = process_settings(args)
     options = settings.options
     run = dataclasses.replace(settings.run, overwrite=args.overwrite)
+    # How fast archiving ran here before, to estimate how long this run takes.
+    state = State(APP_NAME)
+    speed = state.speed(ARCHIVE.name)
 
     if args.input.is_file():
         output = resolve_output_dir(args.input, run.output, batch=False)
-        planned = plan(ARCHIVE, [args.input], options, run, outputs=[output], measure=args.dry_run)
+        planned = plan(ARCHIVE, [args.input], options, run, outputs=[output], speed=speed)
         if args.dry_run:
             print_plan(planned)
             return EXIT_OK
@@ -225,7 +214,9 @@ def cmd_process(args: argparse.Namespace) -> int:
                 "%s is %s archived in %s; use --overwrite to redo it", args.input, how, output
             )
             return EXIT_OK
-        (result,) = execute(planned, on_event=stage_logger(logging.INFO)).items
+        report = execute(planned, on_event=stage_logger(logging.INFO))
+        state.learn_speed(ARCHIVE.name, report.measured_speed())
+        (result,) = report.items
         if result.status is Status.CANCELLED:
             raise KeyboardInterrupt
         if result.status is Status.FAILED:
@@ -239,7 +230,7 @@ def cmd_process(args: argparse.Namespace) -> int:
     if not videos:
         logger.warning("No videos found in %s", args.input)
         return EXIT_OK
-    planned = plan(ARCHIVE, videos, options, run, source=args.input)
+    planned = plan(ARCHIVE, videos, options, run, source=args.input, speed=speed)
     if args.dry_run:
         print_plan(planned)
         return EXIT_OK
@@ -253,6 +244,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         logger.info("[%d/%d] %s: %s", done, total, result.video.name, status)
 
     report = execute(planned, on_progress=progress, on_event=stage_logger(logging.DEBUG))
+    state.learn_speed(ARCHIVE.name, report.measured_speed())
     failed = report.failed
     skipped, outdated = report.count(Status.SKIPPED), report.count(Status.OUTDATED)
     summary = f"Done: {report.count(Status.OK)} archived, {skipped} already archived"
@@ -286,40 +278,6 @@ def stage_logger(level: int):
 def print_plan(planned: Plan) -> None:
     for line in [*planned.summary(), *planned.item_lines()]:
         print(line)
-
-
-def config_target(args: argparse.Namespace) -> Path:
-    """The file to create: --config, then $VIDEOSEMANTICREDUCER_CONFIG, then the default."""
-    if getattr(args, "config", None) is not None:
-        return args.config
-    if env := os.environ.get(CONFIG_ENV):
-        return Path(env)
-    return default_config_path()
-
-
-def cmd_config_init(args: argparse.Namespace) -> int:
-    path = config_target(args)
-    if path.exists() and not args.force:
-        raise ConfigError(f"{path} already exists; use --force to overwrite it")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_template(), encoding="utf-8")
-    print(f"Config file written to {path}")
-    return 0
-
-
-def cmd_config_show(args: argparse.Namespace) -> int:
-    path = find_config(args.config)
-    defaults = load_config(path)  # before printing anything, so errors come alone
-    print(f"# Source: {path or 'built-in defaults (no config file found)'}")
-    print(render_template(defaults), end="")
-    return 0
-
-
-def cmd_config_path(args: argparse.Namespace) -> int:
-    path = config_target(args)
-    status = "exists" if path.is_file() else "not created yet; run `config init`"
-    print(f"{path} ({status})")
-    return 0
 
 
 def cmd_fingerprint(args: argparse.Namespace) -> int:
