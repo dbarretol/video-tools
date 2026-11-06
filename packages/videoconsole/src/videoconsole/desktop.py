@@ -39,6 +39,33 @@ SHELLS = frozenset(
 _ES_CONTINUOUS = 0x80000000
 _ES_SYSTEM_REQUIRED = 0x00000001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STARTF_USESHOWWINDOW = 0x00000001
+_SW_HIDE = 0
+_CLASSIC_CONSOLE = "ConsoleWindowClass"
+"""Window class of a conhost console; Windows Terminal uses ``PseudoConsoleWindow``."""
+
+
+class _StartupInfo(ctypes.Structure):
+    _fields_ = [
+        ("cb", ctypes.c_uint32),
+        ("lpReserved", ctypes.c_wchar_p),
+        ("lpDesktop", ctypes.c_wchar_p),
+        ("lpTitle", ctypes.c_wchar_p),
+        ("dwX", ctypes.c_uint32),
+        ("dwY", ctypes.c_uint32),
+        ("dwXSize", ctypes.c_uint32),
+        ("dwYSize", ctypes.c_uint32),
+        ("dwXCountChars", ctypes.c_uint32),
+        ("dwYCountChars", ctypes.c_uint32),
+        ("dwFillAttribute", ctypes.c_uint32),
+        ("dwFlags", ctypes.c_uint32),
+        ("wShowWindow", ctypes.c_uint16),
+        ("cbReserved2", ctypes.c_uint16),
+        ("lpReserved2", ctypes.c_void_p),
+        ("hStdInput", ctypes.c_void_p),
+        ("hStdOutput", ctypes.c_void_p),
+        ("hStdError", ctypes.c_void_p),
+    ]
 
 
 @dataclass(frozen=True)
@@ -117,16 +144,45 @@ def _image_name(kernel32: Any, pid: int) -> str | None:
         kernel32.CloseHandle(handle)
 
 
+def started_hidden() -> bool:
+    """Whether this process was started with its window hidden.
+
+    Scripts (``Start-Process -WindowStyle Hidden``) and scheduled tasks do that:
+    the console is ours alone, but nobody can see it to press Enter. A hidden
+    console is a classic console window that is not visible. The start-up
+    request is checked too, although launchers such as the venv's
+    ``python.exe`` pass the value on without the flag that makes it count.
+    A pseudo console (Windows Terminal) belongs to a terminal someone sees.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return False
+    hwnd = kernel32.GetConsoleWindow()
+    if hwnd:
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        name = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, name, len(name))
+        if name.value == _CLASSIC_CONSOLE and not user32.IsWindowVisible(hwnd):
+            return True
+    info = _StartupInfo()
+    info.cb = ctypes.sizeof(info)
+    kernel32.GetStartupInfoW(ctypes.byref(info))
+    return bool(info.dwFlags & _STARTF_USESHOWWINDOW) and info.wShowWindow == _SW_HIDE
+
+
 def launched_alone() -> bool:
     """Whether this console window was opened for us, so it closes when we exit.
 
     True when no shell is attached to the console (started from the Explorer
-    or a shortcut) and someone can answer (stdin is a terminal).
+    or a shortcut), someone can answer (stdin is a terminal) and the window is
+    not hidden (see `started_hidden`).
     """
     if sys.stdin is None or not sys.stdin.isatty():
         return False
     programs = console_programs()
-    return programs is not None and not SHELLS.intersection(programs)
+    if programs is None or SHELLS.intersection(programs):
+        return False
+    return not started_hidden()
 
 
 def open_folder(folder: Path) -> None:

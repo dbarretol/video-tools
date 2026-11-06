@@ -86,7 +86,8 @@ On Windows, while videos are processed the computer does not go to sleep (the sc
 off), and a run that took 5 minutes or more ends with a desktop notification. Started from the
 Explorer (double click, a shortcut, or files dropped on the program), the window stays open at the
 end until Enter is pressed, and typing `O` first opens the output folder; `--open` opens it in any
-case. These are set in the `console` section of each tool's config file:
+case. Started with a hidden window (`Start-Process -WindowStyle Hidden`, a scheduled task), it
+never waits. These are set in the `console` section of each tool's config file:
 
 ```yaml
 console:

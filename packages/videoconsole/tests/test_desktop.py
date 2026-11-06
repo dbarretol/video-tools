@@ -83,8 +83,21 @@ def test_keep_awake_is_released_even_on_errors(monkeypatch):
 )
 def test_launched_alone_means_no_shell_on_the_console(monkeypatch, programs, alone):
     monkeypatch.setattr(desktop, "console_programs", lambda: programs)
+    monkeypatch.setattr(desktop, "started_hidden", lambda: False)
     monkeypatch.setattr("sys.stdin", type("Tty", (io.StringIO,), {"isatty": lambda self: True})())
     assert launched_alone() is alone
+
+
+def test_a_hidden_window_is_never_alone(monkeypatch):
+    # Start-Process -WindowStyle Hidden or a scheduled task: nobody could press Enter.
+    monkeypatch.setattr(desktop, "console_programs", lambda: ["videothumb", "python"])
+    monkeypatch.setattr(desktop, "started_hidden", lambda: True)
+    monkeypatch.setattr("sys.stdin", type("Tty", (io.StringIO,), {"isatty": lambda self: True})())
+    assert launched_alone() is False
+
+
+def test_started_hidden_reads_the_startup_info():
+    assert desktop.started_hidden() is False  # pytest runs in a visible console, or none
 
 
 def test_nobody_to_answer_is_never_alone(monkeypatch):
