@@ -19,8 +19,8 @@ CONSOLE_SECTION = "console"
 CONFIG = AppConfig(
     APP_NAME,
     (
-        Section(Mode.SHEET.value, (SheetOptions,), "--mode sheet"),
-        Section(Mode.SNAPSHOTS.value, (SnapshotOptions,), "--mode snapshots"),
+        Section(Mode.SHEET.value, (SheetOptions,), "videothumb sheet"),
+        Section(Mode.FRAMES.value, (SnapshotOptions,), "videothumb frames"),
         # The output depends on --video or --folder, so it is not a default.
         Section(RUN_SECTION, (RunOptions,), "--folder", skip=("output",)),
         Section(CONSOLE_SECTION, (ConsoleOptions,), "console window and notifications"),

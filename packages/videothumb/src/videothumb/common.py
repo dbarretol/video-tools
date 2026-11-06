@@ -15,7 +15,13 @@ Sampling = Literal["keyframe", "precise"]
 
 class Mode(StrEnum):
     SHEET = "sheet"
-    SNAPSHOTS = "snapshots"
+    FRAMES = "frames"
+    SNAPSHOTS = "frames"
+    """Old name of FRAMES, still used by the tkinter app."""
+
+    @classmethod
+    def _missing_(cls, value: object) -> Mode | None:
+        return cls.FRAMES if value == "snapshots" else None  # settings saved before the rename
 
 
 def jpeg_quality_option() -> Any:

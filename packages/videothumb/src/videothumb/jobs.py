@@ -19,7 +19,12 @@ from videocore import (
 from videocore.verify import FrameCount, OutputError, check_image
 from videothumb.common import Mode
 from videothumb.sheet import SheetOptions, default_sheet_path, make_sheet
-from videothumb.snapshots import SnapshotOptions, default_snapshot_dir, make_snapshots
+from videothumb.snapshots import (
+    FOLDER_SUFFIX,
+    SnapshotOptions,
+    default_snapshot_dir,
+    make_snapshots,
+)
 
 Options = SheetOptions | SnapshotOptions
 
@@ -77,29 +82,29 @@ class SheetTask:
 
 @dataclass(frozen=True)
 class SnapshotsTask:
-    """``videocore.jobs.Task`` that saves a folder of snapshots per video."""
+    """``videocore.jobs.Task`` that saves a folder of frames per video."""
 
-    name: str = "snapshots"
+    name: str = "frames"
 
     def output(self, slot: OutputSlot) -> Path:
-        return slot_output(slot, Mode.SNAPSHOTS)
+        return slot_output(slot, Mode.FRAMES)
 
     def state(self, output: Path, name: str, options: SnapshotOptions) -> Status | None:
-        return Status.SKIPPED if has_output(output, Mode.SNAPSHOTS) else None
+        return Status.SKIPPED if has_output(output, Mode.FRAMES) else None
 
     def run(
         self, video: Path, output: Path, name: str, options: SnapshotOptions, decoders: int | None
     ) -> Produced:
         produced = Produced(output)
         produced.files = make_snapshots(
-            video, output, options, decoders=decoders, counts=produced.frames
+            video, output, options, decoders=decoders, counts=produced.frames, name=name
         )
         return produced
 
     def verify(self, output: Path, value: Produced, options: SnapshotOptions) -> list[str]:
         for path in value.files:
             check_image(path)
-        problem = value.frames.problem("snapshots")
+        problem = value.frames.problem("frames")
         return [problem] if problem else []
 
     def cleanup(self, output: Path) -> None:
@@ -113,7 +118,7 @@ class SnapshotsTask:
 
 TASKS: dict[Mode, SheetTask | SnapshotsTask] = {
     Mode.SHEET: SheetTask(),
-    Mode.SNAPSHOTS: SnapshotsTask(),
+    Mode.FRAMES: SnapshotsTask(),
 }
 
 
@@ -128,12 +133,10 @@ def batch_output(video: Path, mode: Mode, root: Path | None) -> Path:
 
 
 def slot_output(slot: OutputSlot, mode: Mode) -> Path:
-    """Sheet file or snapshot folder of a planned slot (see ``videocore.outputs``)."""
+    """Sheet file or frames folder of a planned slot (see ``videocore.outputs``)."""
     if mode is Mode.SHEET:
         return slot.folder / f"{slot.name}_sheet.jpg"
-    # A renamed slot is the full file name (clip.mp4), which a folder next to the
-    # video cannot take, so renamed snapshot folders get a suffix.
-    return slot.folder / (f"{slot.name}_snapshots" if slot.renamed else slot.name)
+    return slot.folder / f"{slot.name}{FOLDER_SUFFIX}"
 
 
 def process(video: Path, mode: Mode, options: Options, output: Path | None = None) -> Path:
@@ -199,11 +202,11 @@ def _batch_result(item: ItemResult) -> BatchResult:
 
 
 def has_output(output: Path, mode: Mode) -> bool:
-    """A sheet file, or a snapshot folder holding at least one snapshot.
+    """A sheet file, or a frames folder holding at least one frame.
 
     Files are written under a temporary name and renamed when finished, so an
     existing file is never a truncated one.
     """
     if mode is Mode.SHEET:
         return output.is_file()
-    return output.is_dir() and any(output.glob("snapshot_*.jpg"))
+    return output.is_dir() and any(output.glob("*_f[0-9][0-9][0-9]*.jpg"))

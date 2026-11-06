@@ -1,12 +1,14 @@
-"""Entry point: without arguments opens the GUI, with arguments runs the command line.
+"""Command line: ``videothumb sheet|frames PATH...``, ``videothumb gui`` and ``videothumb config``.
 
-``videothumb config ...`` manages the defaults file of the command line.
+The old form (``--video``/``--folder`` with ``--mode``) still works for now,
+with a warning that shows the new command.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,18 +31,20 @@ from videocore import (
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
+    Inputs,
     RunOptions,
     State,
     Status,
     UsageError,
+    collect_inputs,
     configure_logging,
     execute,
-    find_videos,
     hint_for,
     plan,
 )
 from videocore.config import Values, add_config_commands
-from videocore.options import add_arguments, given_values, options_of
+from videocore.inputs import add_input_arguments, require_inputs
+from videocore.options import add_arguments, given_values
 from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
 from videothumb.config import CONFIG, CONSOLE_SECTION, RUN_SECTION
@@ -64,34 +68,45 @@ WORDING = Wording(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
-        description=(
-            "Generate contact sheets and individual snapshots from videos. "
-            "Run without arguments to open the desktop app."
-        ),
+        description="Contact sheets and frames of videos.",
         epilog=(
-            "Defaults shown are the built-in ones; a config file can change them "
-            f"(see `{APP_NAME} config --help`)."
+            f"`{APP_NAME} COMMAND --help` shows the options of a command. Defaults shown are the "
+            f"built-in ones; a config file can change them (see `{APP_NAME} config --help`)."
         ),
-        parents=[CONFIG.file_option()],
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--video", type=Path, metavar="PATH", help="a single video")
-    source.add_argument("--folder", type=Path, metavar="PATH", help="every video in a folder")
-    parser.add_argument("--mode", choices=[m.value for m in Mode], required=True)
-    parser.add_argument(
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    common = common_options()
+    for mode, help_text in COMMANDS.items():
+        sub = commands.add_parser(
+            mode.value,
+            parents=[common],
+            help=help_text,
+            description=help_text[0].upper() + help_text[1:] + ".",
+            epilog="Defaults shown are the built-in ones; a config file can change them.",
+        )
+        add_arguments(sub, MODE_OPTIONS[mode])
+        sub.set_defaults(mode=mode.value)
+    commands.add_parser("gui", help="open the desktop app")
+    commands.add_parser("config", help="manage the defaults file (see `config --help`)")
+    return parser
+
+
+def common_options() -> argparse.ArgumentParser:
+    """The options every processing command shares."""
+    common = argparse.ArgumentParser(add_help=False, parents=[CONFIG.file_option()])
+    add_input_arguments(common)
+    common.add_argument(
         "-o",
         "--output",
         type=Path,
         metavar="PATH",
         help=(
-            "with --video: the sheet file or snapshot folder; with --folder: a folder that "
-            "receives every output, recreating subfolders with -r (default: next to each video)"
+            "for one video: the sheet file or frames folder; otherwise a folder that receives "
+            "every output, recreating subfolders with -r (default: next to each video)"
         ),
     )
-
-    add_arguments(parser, SheetOptions, SnapshotOptions)
-    parser.add_argument(
+    common.add_argument(
         "--precise",
         action="store_true",
         help=(
@@ -99,8 +114,8 @@ def build_parser() -> argparse.ArgumentParser:
             "used, and exact positions only where keyframes would repeat"
         ),
     )
-    add_arguments(parser, RunOptions, skip=("output",))
-    existing = parser.add_mutually_exclusive_group()
+    add_arguments(common, RunOptions, skip=("output",))
+    existing = common.add_mutually_exclusive_group()
     existing.add_argument(
         "--overwrite",
         dest="skip_existing",
@@ -111,22 +126,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-existing",
         dest="skip_existing",
         action="store_true",
-        help="leave videos whose sheet or snapshot folder already exists",
+        help="leave videos whose sheet or frames folder already exists",
     )
     # Explicit: a store_false action (--overwrite) would otherwise make the default True.
-    parser.set_defaults(skip_existing=False)
-    parser.add_argument(
+    common.set_defaults(skip_existing=False)
+    common.add_argument(
         "--dry-run",
         action="store_true",
         help="show what would be done, without processing anything",
     )
-    parser.add_argument(
+    common.add_argument(
         "--strict",
         action="store_true",
         help="treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1)",
     )
-    add_verbosity(parser)
-    return parser
+    add_verbosity(common)
+    return common
 
 
 def add_verbosity(parser: argparse.ArgumentParser) -> None:
@@ -141,24 +156,65 @@ def add_verbosity(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--open", action="store_true", help="open the output folder when done")
 
 
+LEGACY_FLAGS = ("--mode", "--video", "--folder")
+
+
+def translate_legacy(argv: list[str]) -> tuple[list[str], str | None]:
+    """Turn the old command line into the new one, with a warning saying how to write it.
+
+    ``--video X --mode sheet`` and ``--folder X --mode snapshots`` become
+    ``sheet X`` and ``frames X``; the ``snapshots`` command becomes ``frames``.
+    """
+    if argv and argv[0] == "snapshots":
+        new = ["frames", *argv[1:]]
+        return new, f"`{APP_NAME} snapshots` is now `{APP_NAME} frames`"
+    if not any(arg.split("=", 1)[0] in LEGACY_FLAGS for arg in argv):
+        return argv, None
+    mode, rest = None, []
+    args = iter(argv)
+    for arg in args:
+        name, has_value, value = arg.partition("=")
+        if name in LEGACY_FLAGS:
+            value = value if has_value else next(args, "")
+            if name == "--mode":
+                mode = "frames" if value == "snapshots" else value
+            else:
+                rest.append(value)
+        else:
+            rest.append(arg)
+    if mode is None:
+        return argv, None  # the new parser explains what is missing
+    new = [mode, *rest]
+    command = subprocess.list2cmdline([APP_NAME, *new])
+    return new, f"--mode, --video and --folder are deprecated and will be removed; use: {command}"
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
-    if not argv:
+    if argv and argv[0] == "config":
+        return config_main(argv[1:])
+    if argv and argv[0] == "gui":
         from videothumb.gui.app import launch
 
         launch()
-        return 0
-    if argv[0] == "config":
-        return config_main(argv[1:])
+        return EXIT_OK
 
+    argv, deprecation = translate_legacy(argv)
+    parser = build_parser()
     try:
-        args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
+        args = parser.parse_args(argv)  # exits with 2 on invalid arguments
     except SystemExit:
         pause_if_alone()  # so that a window opened for us shows the error
         raise
+    if args.command is None:
+        parser.print_help()
+        pause_if_alone()
+        return EXIT_OK
     console = Console(quiet=args.quiet, json=args.json, tool=APP_NAME)
-    console.record(mode=args.mode)
+    console.record(command=args.command)
+    if deprecation:
+        console.warning(deprecation)
     args.desktop = Desktop(APP_NAME, console, WORDING, open_output=args.open)
     args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
     exit_code = console.finish(run(args, console), log_file=args.log_file)
@@ -168,19 +224,22 @@ def main(argv: list[str] | None = None) -> int:
 def run(args: argparse.Namespace, console: Console) -> int:
     """Run the parsed command line; errors are reported, not raised."""
     try:
+        require_inputs(args)
         config_path = CONFIG.find(args.config)
         if config_path is not None:
             logger.debug("Using defaults from %s", config_path)
         values = CONFIG.load(config_path)
         args.desktop.configure(ConsoleOptions(**values.get(CONSOLE_SECTION, {})))
-        mode, options = Mode(args.mode), build_options(args, values, console)
-        if args.video is not None:
-            if not args.video.is_file():
-                raise UsageError(f"Video not found: {args.video}")
-            return run_single(args, console, mode, options)
-        if not args.folder.is_dir():
-            raise UsageError(f"Folder not found: {args.folder}")
-        return run_batch(args, console, mode, options, values)
+        mode, options = Mode(args.mode), build_options(args, values)
+        settings = values.get(RUN_SECTION, {}) | given_values(RunOptions, args)
+        settings.pop("output", None)  # -o is not a config option; it is read below
+        run_options = RunOptions(output=args.output, overwrite=not args.skip_existing, **settings)
+        inputs = collect_inputs(args.paths, args.input_list, recursive=run_options.recursive)
+        for warning in inputs.warnings:
+            console.warning(warning)
+        if inputs.single_file:
+            return run_single(args, console, mode, options, inputs.videos[0])
+        return run_batch(args, console, mode, options, run_options, inputs)
     except KeyboardInterrupt as exc:
         logger.info("Interrupted", exc_info=True)
         console.record_error(exc)
@@ -202,7 +261,11 @@ def run(args: argparse.Namespace, console: Console) -> int:
 
 MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions]] = {
     Mode.SHEET: SheetOptions,
-    Mode.SNAPSHOTS: SnapshotOptions,
+    Mode.FRAMES: SnapshotOptions,
+}
+COMMANDS = {
+    Mode.SHEET: "a contact sheet per video: a grid of frames under the video's details",
+    Mode.FRAMES: "a folder of full-size frames per video, named after the video and the time",
 }
 
 
@@ -211,8 +274,8 @@ def config_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog=f"{APP_NAME} config",
         description=(
-            "Manage the defaults file of the command line. Keys are MODE.OPTION or "
-            "run.OPTION, e.g. `config set sheet.columns 6`."
+            "Manage the defaults file of the command line. Keys are COMMAND.OPTION, "
+            "run.OPTION or console.OPTION, e.g. `config set sheet.columns 6`."
         ),
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
@@ -231,32 +294,19 @@ def config_main(argv: list[str]) -> int:
         return EXIT_FAILED
 
 
-def build_options(
-    args: argparse.Namespace, values: Values | None = None, console: Console | None = None
-) -> Options:
-    """The options of the selected mode: flags, then the config file `values`, then defaults.
-
-    Warns about flags that only apply to another mode.
-    """
+def build_options(args: argparse.Namespace, values: Values | None = None) -> Options:
+    """The options of the command: flags, then the config file `values`, then defaults."""
     mode = Mode(args.mode)
     cls = MODE_OPTIONS[mode]
-    defaults = (values or {}).get(mode.value, {})
-    given = given_values(cls, args)
-    for other in MODE_OPTIONS.values():
-        for opt in options_of(other):
-            if opt.name not in given and getattr(args, opt.name, None) is not None:
-                message = f"{opt.flags[-1]} does not apply to --mode {mode}; ignored"
-                logger.warning("%s", message)
-                if console is not None:
-                    console.warning(message)
-    settings = defaults | given
+    settings = (values or {}).get(mode.value, {}) | given_values(cls, args)
     if args.precise:
         settings["sampling"] = "precise"
     return cls(**settings)
 
 
-def run_single(args: argparse.Namespace, console: Console, mode: Mode, options: Options) -> int:
-    video = args.video
+def run_single(
+    args: argparse.Namespace, console: Console, mode: Mode, options: Options, video: Path
+) -> int:
     target = args.output or default_output(video, mode)
     run = RunOptions(overwrite=not args.skip_existing)
     task, state = TASKS[mode], State(APP_NAME)
@@ -280,7 +330,7 @@ def run_single(args: argparse.Namespace, console: Console, mode: Mode, options: 
         console.error(str(result.error))
         console.hint(result.hint, args.log_file)
         return EXIT_FAILED
-    noun = "Contact sheet" if mode is Mode.SHEET else "Snapshots"
+    noun = "Contact sheet" if mode is Mode.SHEET else "Frames"
     console.info(f"{noun} saved to {result.output}", "ok")
     for problem in result.problems:
         console.warning(f"incomplete output: {problem}")
@@ -288,17 +338,26 @@ def run_single(args: argparse.Namespace, console: Console, mode: Mode, options: 
 
 
 def run_batch(
-    args: argparse.Namespace, console: Console, mode: Mode, options: Options, values: Values
+    args: argparse.Namespace,
+    console: Console,
+    mode: Mode,
+    options: Options,
+    run: RunOptions,
+    inputs: Inputs,
 ) -> int:
-    settings = values.get(RUN_SECTION, {}) | given_values(RunOptions, args)
-    settings.pop("output", None)  # -o is not a config option; it is read below
-    run = RunOptions(output=args.output, overwrite=not args.skip_existing, **settings)
-    videos = find_videos(args.folder, recursive=run.recursive)
-    if not videos:
-        console.info(f"No videos found in {args.folder}")
+    if not len(inputs):
+        console.info("No videos found")
         return EXIT_OK
     task, state = TASKS[mode], State(APP_NAME)
-    planned = plan(task, videos, options, run, source=args.folder, speed=state.speed(task.name))
+    planned = plan(
+        task,
+        inputs.videos,
+        options,
+        run,
+        source=inputs.roots,
+        invalid=inputs.invalid,
+        speed=state.speed(task.name),
+    )
     print_plan(console, planned, WORDING, items=args.dry_run)
     if args.dry_run:
         return EXIT_OK
@@ -308,7 +367,8 @@ def run_batch(
     args.desktop.report = report
     state.learn_speed(task.name, report.measured_speed())
     print_report(console, report, WORDING, log_file=args.log_file)
-    title = f"{APP_NAME} --folder {args.folder} --mode {mode}"
+    given = [*args.paths, *(f"--input-list {name}" for name in args.input_list)]
+    title = subprocess.list2cmdline([APP_NAME, mode.value, *given])
     resume = "run the same command with --skip-existing"
     report_run_lists(console, report, APP_NAME, title=title, resume=resume)
     return report.exit_status(strict=args.strict)
