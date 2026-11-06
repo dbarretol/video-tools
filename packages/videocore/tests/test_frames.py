@@ -137,3 +137,36 @@ def test_evenly_spaced_without_endpoints():
 def test_evenly_spaced_rejects_non_positive_count():
     with pytest.raises(ValueError):
         evenly_spaced(0.0, 1.0, 0)
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_fallback_resamples_repeated_keyframes(video_only, frame_index, workers):
+    # Keyframes every 0.5 s: 0.1 and 0.2 both land on frame 0, 0.6 on frame 5.
+    timestamps = [0.6, 0.1, 0.2]
+    plain = sample_frames(video_only, timestamps, workers=workers)
+    assert [frame_index(f) for f in plain] == [5, 0, 0]
+
+    frames = sample_frames(video_only, timestamps, workers=workers, fallback=True)
+    assert [frame_index(f) for f in frames] == [5, 0, 2]
+    assert [bool(f.info.get("resampled")) for f in frames] == [False, False, True]
+    assert frames[2].info["time"] == pytest.approx(0.2)
+
+
+def test_fallback_resamples_missing_frames(video_only, frame_index, monkeypatch):
+    from videocore import frames as frames_module
+
+    real = frames_module._Seeker.frame
+
+    def lose_keyframes(self, index):
+        return None if self.job.mode == "keyframe" and index == 1 else real(self, index)
+
+    monkeypatch.setattr(frames_module._Seeker, "frame", lose_keyframes)
+    frames = sample_frames(video_only, [0.0, 0.7], fallback=True, workers=1)
+    assert [frame_index(f) for f in frames] == [0, 7]
+    assert sample_frames(video_only, [0.0, 0.7], workers=1)[1] is None
+
+
+def test_fallback_does_not_change_precise_mode(video_only, frame_index):
+    frames = sample_frames(video_only, [0.1, 0.2], mode="precise", fallback=True)
+    assert [frame_index(f) for f in frames] == [1, 2]
+    assert not any(f.info.get("resampled") for f in frames)

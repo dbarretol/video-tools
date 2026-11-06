@@ -227,3 +227,21 @@ def test_sheet_of_the_wrong_size_fails(clip, tmp_path):
     Image.new("RGB", (100, 100)).save(path)
     with pytest.raises(OutputError, match="100 pixels wide, expected 1600"):
         SheetTask().verify(path, Produced(path, FrameCount(20, 20)), SheetOptions())
+
+
+@pytest.mark.parametrize(
+    ("mode", "function"), [("sheet", "sample_frames"), ("snapshots", "iter_frames")]
+)
+def test_keyframe_sampling_falls_back_to_precise(clip, tmp_path, monkeypatch, mode, function):
+    import importlib
+
+    module = importlib.import_module(f"videothumb.{mode}")
+    real, calls = getattr(module, function), []
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, function, spy)
+    assert cli.main(["--video", str(clip), "--mode", mode, "-o", str(tmp_path / "out")]) == 0
+    assert calls[0]["fallback"] is True and calls[0]["mode"] == "keyframe"

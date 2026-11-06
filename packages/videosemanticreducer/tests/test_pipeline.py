@@ -449,3 +449,19 @@ def test_an_unreadable_artifact_fails_the_archive(clip, tmp_path, monkeypatch):
     assert "clip_summary.mp4 lasts 0.0 s, expected about" in report.items[0].error
     manifest = read_manifest(tmp_path / "out" / "clip_summary" / "clip.archive.json")
     assert manifest["complete"] is False and "OutputError" in manifest["error"]
+
+
+def test_summary_and_grid_fall_back_to_precise_sampling(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import pipeline
+
+    calls = []
+    for name in ("iter_frames", "sample_frames"):
+        real = getattr(pipeline, name)
+
+        def spy(*args, _real=real, **kwargs):
+            calls.append(kwargs.get("fallback"))
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(pipeline, name, spy)
+    process_video(clip, tmp_path, ProcessOptions(num_snapshots=4, fingerprint=False))
+    assert calls == [True, True]  # summary snapshots, then the grid (sampled separately)
