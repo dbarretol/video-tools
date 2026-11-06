@@ -51,4 +51,5 @@ CONFIG = AppConfig(
         ),
     ),
     f"{APP_NAME} defaults for the command line (the desktop app does not use them).",
+    renamed=(("snapshots", Mode.FRAMES.value),),
 )
