@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from videocore import evenly_spaced, iter_frames, probe
+from videocore import atomic_write, evenly_spaced, iter_frames, probe
 from videothumb.common import Sampling
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,8 @@ def make_snapshots(
         if image is None:
             continue
         path = output_dir / f"snapshot_{index + 1:0{pad}d}.jpg"
-        image.save(path, "JPEG", quality=options.jpeg_quality)
+        with atomic_write(path) as part:
+            image.save(part, "JPEG", quality=options.jpeg_quality)
         saved.append(path)
     if not saved:
         raise RuntimeError(f"No frame could be decoded from {info.path}")

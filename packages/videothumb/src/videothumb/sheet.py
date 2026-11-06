@@ -12,7 +12,15 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from videocore import VideoInfo, compose_grid, evenly_spaced, format_hms, probe, sample_frames
+from videocore import (
+    VideoInfo,
+    atomic_write,
+    compose_grid,
+    evenly_spaced,
+    format_hms,
+    probe,
+    sample_frames,
+)
 from videothumb.common import Sampling
 
 BACKGROUND = (30, 30, 30)
@@ -77,8 +85,8 @@ def make_sheet(video: str | Path, output: str | Path, options: SheetOptions | No
 
     sheet = render_sheet(info, frames, timestamps, options.columns, (width, height))
     output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(output, "JPEG", quality=options.jpeg_quality)
+    with atomic_write(output) as part:
+        sheet.save(part, "JPEG", quality=options.jpeg_quality)
     return output
 
 

@@ -7,7 +7,15 @@ import functools
 from collections.abc import Callable
 from pathlib import Path
 
-from videocore import BatchResult, OutputSlot, default_workers, plan_outputs, run_parallel
+from videocore import (
+    BatchResult,
+    OutputSlot,
+    default_workers,
+    part_path,
+    plan_outputs,
+    remove_partials,
+    run_parallel,
+)
 from videothumb.common import Mode
 from videothumb.sheet import SheetOptions, default_sheet_path, make_sheet
 from videothumb.snapshots import SnapshotOptions, default_snapshot_dir, make_snapshots
@@ -70,14 +78,23 @@ def process_folder(
         # Videos already run in parallel; one decoder per video avoids oversubscription.
         options = _with_workers(options, 1)
     task = functools.partial(_process_in_batch, mode=mode, options=options)
-    return run_parallel(
-        task,
-        videos,
-        item_args=slots,
-        workers=workers,
-        on_progress=on_progress,
-        should_cancel=should_cancel,
-    )
+    try:
+        return run_parallel(
+            task,
+            videos,
+            item_args=slots,
+            workers=workers,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+        )
+    finally:
+        # Workers killed on cancel or Ctrl+C leave their unfinished files behind.
+        for slot in slots:
+            output = slot_output(slot, mode)
+            if mode is Mode.SHEET:
+                part_path(output).unlink(missing_ok=True)
+            else:
+                remove_partials(output)
 
 
 def _process_in_batch(video: Path, slot: OutputSlot, *, mode: Mode, options: Options) -> Path:
