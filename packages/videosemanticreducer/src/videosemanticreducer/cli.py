@@ -23,6 +23,7 @@ from videosemanticreducer.config import (
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
 from videosemanticreducer.pipeline import (
     ProcessOptions,
+    is_output_dir,
     process_batch,
     process_video,
     resolve_output_dir,
@@ -176,7 +177,7 @@ def cmd_process(args: argparse.Namespace) -> int:
     if not args.input.is_dir():
         raise FileNotFoundError(f"Input not found: {args.input}")
 
-    videos = find_videos(args.input, recursive=settings.recursive)
+    videos = find_videos(args.input, recursive=settings.recursive, skip_dir=is_output_dir)
     if not videos:
         logger.warning("No videos found in %s", args.input)
         return 0

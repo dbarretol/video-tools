@@ -48,6 +48,7 @@ SNAPSHOT_MAX_SIDE = 1280
 THUMB_MAX_SIDE = 240
 THUMB_JPEG_QUALITY = 80
 INFO_CARD_DURATION = 8.0
+OUTPUT_DIR_SUFFIX = "_summary"
 
 
 @dataclass(frozen=True)
@@ -88,8 +89,22 @@ def resolve_output_dir(video: Path, output: Path | None, *, batch: bool) -> Path
     - output for a batch: ``<output>/<stem>_summary/``
     """
     if output is None:
-        return video.parent / f"{video.stem}_summary"
-    return output / f"{video.stem}_summary" if batch else output
+        return video.parent / f"{video.stem}{OUTPUT_DIR_SUFFIX}"
+    return output / f"{video.stem}{OUTPUT_DIR_SUFFIX}" if batch else output
+
+
+def is_output_dir(path: Path) -> bool:
+    """True for a ``<stem>_summary`` folder written by this tool.
+
+    Recursive scans skip these folders, so the summary videos inside them are
+    never archived again. A folder that only happens to end in ``_summary`` is
+    still scanned unless it holds this tool's report or fingerprint.
+    """
+    if not path.name.endswith(OUTPUT_DIR_SUFFIX):
+        return False
+    stem = path.name.removesuffix(OUTPUT_DIR_SUFFIX)
+    markers = (f"{stem}_info.txt", f"{stem}.fingerprint.json")
+    return any((path / marker).is_file() for marker in markers)
 
 
 def snapshot_timestamps(duration: float, count: int) -> list[float]:
@@ -108,6 +123,9 @@ def process_video(
 
     with timer("probe"):
         info = probe(video)
+    if not info.has_video:
+        # Nothing could prove later that a copy matches this file, so it is not archived.
+        raise ValueError(f"No video stream in {video}")
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = video.stem
     result.outputs.append(write_report(info, output_dir / f"{stem}_info.txt"))
@@ -116,9 +134,7 @@ def process_video(
     with ThreadPoolExecutor(max_workers=1) as hasher:
         sha_future = hasher.submit(fp.compute_sha256, video) if options.fingerprint else None
 
-        if not info.has_video:
-            logger.info("%s has no video stream; only metadata and file hash", video)
-        elif options.summary or options.thumbnail:
+        if options.summary or options.thumbnail:
             with timer("snapshots"):
                 summary_path = output_dir / f"{stem}_summary.mp4"
                 thumbs = _snapshots_and_thumbs(info, summary_path, options, result)
@@ -126,18 +142,16 @@ def process_video(
                 with timer("thumbnail"):
                     result.outputs.append(_write_thumbnail(info, thumbs, output_dir, options))
 
-        if options.fingerprint:
-            global_hashes, keyframe_hashes = None, []
-            if info.has_video:
-                with timer("global_hashes"):
-                    global_hashes = fp.compute_global_hashes(info, workers=options.sampling_workers)
-                with timer("keyframe_hashes"):
-                    keyframe_hashes = fp.compute_keyframe_hashes(
-                        info, workers=options.sampling_workers
-                    )
+        if sha_future is not None:
+            with timer("global_hashes"):
+                global_hashes = fp.compute_global_hashes(info, workers=options.sampling_workers)
+            with timer("keyframe_hashes"):
+                keyframe_hashes = fp.compute_keyframe_hashes(info, workers=options.sampling_workers)
             with timer("sha256_wait"):
                 sha256 = sha_future.result()
             fingerprint = fp.build_fingerprint(info, sha256, global_hashes, keyframe_hashes)
+            # An incomplete fingerprint is never written: it would look like a valid archive.
+            fp.check_complete(fingerprint)
             path = output_dir / f"{stem}.fingerprint.json"
             result.outputs.append(fp.save_fingerprint(fingerprint, path))
 
@@ -246,8 +260,16 @@ def _grid_sources(snapshots: int, cells: int) -> dict[int, list[int]]:
 def _write_thumbnail(
     info: VideoInfo, thumbs: list[Image.Image | None], output_dir: Path, options: ProcessOptions
 ) -> Path:
-    if not any(thumb is not None for thumb in thumbs):
+    decoded = sum(thumb is not None for thumb in thumbs)
+    if decoded == 0:
         raise RuntimeError(f"No thumbnail could be decoded from {info.path}")
+    if decoded < len(thumbs):
+        logger.warning(
+            "Thumbnail grid of %s has %d/%d cells; the rest are black",
+            info.path,
+            decoded,
+            len(thumbs),
+        )
     assert info.video is not None
     cell_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     grid = compose_grid(thumbs, options.thumb_cols, cell_size=cell_size)
