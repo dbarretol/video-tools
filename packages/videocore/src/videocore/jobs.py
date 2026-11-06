@@ -28,6 +28,7 @@ from videocore.errors import EXIT_FAILED, EXIT_OK
 from videocore.options import option, validate
 from videocore.outputs import OutputSlot, plan_outputs
 from videocore.probe import format_hms, probe
+from videocore.progress import ProgressEvent
 
 logger = logging.getLogger(__name__)
 
@@ -296,14 +297,17 @@ def execute[T](
     planned: Plan[T],
     *,
     on_progress: Callable[[int, int, ItemResult], None] | None = None,
+    on_event: Callable[[ProgressEvent], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> RunReport:
     """Process the pending items of `planned` in parallel; one failure does not stop the others.
 
-    `on_progress(done, total, result)` is called as each pending item finishes.
-    Items not finished when `should_cancel()` returns True are reported as
-    CANCELLED. Unfinished files are removed even when this call is interrupted
-    (Ctrl+C), which then propagates.
+    `on_progress(done, total, result)` is called as each pending item finishes,
+    and `on_event` receives the progress events from inside each video (see
+    ``videocore.batch.run_parallel``). When `should_cancel()` returns True,
+    running videos stop at their next step; every unfinished item is reported
+    as CANCELLED. Unfinished files are removed even when this call is
+    interrupted (Ctrl+C), which then propagates.
     """
     pending = planned.pending
     # Videos already run in parallel; one decoder per video avoids oversubscription.
@@ -322,6 +326,7 @@ def execute[T](
             item_args=[(item.output, item.name) for item in pending],
             workers=planned.workers,
             on_progress=progress,
+            on_event=on_event,
             should_cancel=should_cancel,
         )
     finally:
@@ -349,11 +354,12 @@ def run_task[T](
     *,
     source: Path | None = None,
     on_progress: Callable[[int, int, ItemResult], None] | None = None,
+    on_event: Callable[[ProgressEvent], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> RunReport:
     """`plan` then `execute`, without measuring durations."""
     planned = plan(task, videos, options, run, source=source, measure=False)
-    return execute(planned, on_progress=on_progress, should_cancel=should_cancel)
+    return execute(planned, on_progress=on_progress, on_event=on_event, should_cancel=should_cancel)
 
 
 def _run_item(
@@ -368,7 +374,9 @@ def _item_result(result: BatchResult, output: Path) -> ItemResult:
     return ItemResult(
         video=result.item,
         output=output,
-        status=Status.OK if result.ok else Status.FAILED,
+        status=Status.CANCELLED
+        if result.cancelled
+        else (Status.OK if result.ok else Status.FAILED),
         value=result.value,
         error=result.error,
         error_type=result.error_type,

@@ -35,6 +35,7 @@ from typing import Literal
 import av
 from PIL import Image
 
+from videocore import progress
 from videocore.errors import VideoOpenError
 
 Mode = Literal["keyframe", "precise"]
@@ -69,6 +70,7 @@ def sample_frames(
     size: tuple[int, int] | None = None,
     workers: int | None = None,
     draft: bool = False,
+    stage: str | None = None,
 ) -> list[Image.Image | None]:
     """Decode one RGB frame per timestamp (seconds).
 
@@ -82,9 +84,15 @@ def sample_frames(
     `workers` is the number of containers decoding in parallel threads. It
     defaults to up to 4 in keyframe mode and 1 in precise mode; pass 1 when the
     caller already processes several videos in parallel.
+
+    With `stage`, each decoded frame is reported as progress of that stage
+    (see ``videocore.progress``). Decoding stops with ``progress.Cancelled``
+    when the current run is cancelled.
     """
     results: list[Image.Image | None] = [None] * len(timestamps)
-    frames = iter_frames(path, timestamps, mode=mode, size=size, workers=workers, draft=draft)
+    frames = iter_frames(
+        path, timestamps, mode=mode, size=size, workers=workers, draft=draft, stage=stage
+    )
     for index, image in frames:
         results[index] = image
     return results
@@ -98,6 +106,7 @@ def iter_frames(
     size: tuple[int, int] | None = None,
     workers: int | None = None,
     draft: bool = False,
+    stage: str | None = None,
 ) -> Iterator[tuple[int, Image.Image | None]]:
     """Like `sample_frames`, but yield ``(index, frame)`` pairs in timestamp order.
 
@@ -113,9 +122,20 @@ def iter_frames(
         workers = _default_workers(mode)
     workers = max(1, min(workers, len(order)))
     job = _Job(os.fspath(path), timestamps, mode, size, draft)
-    if workers == 1:
-        return job.decode(order)
-    return _decode_parallel(job, order, workers)
+    frames = job.decode(order) if workers == 1 else _decode_parallel(job, order, workers)
+    return frames if stage is None else _report(frames, stage, len(order))
+
+
+def _report(
+    frames: Iterator[tuple[int, Image.Image | None]], stage: str, total: int
+) -> Iterator[tuple[int, Image.Image | None]]:
+    progress.stage(stage, 0, total)
+    with closing(frames):
+        for done, pair in enumerate(frames, 1):
+            # Also checked here: helper threads may have decoded every frame already.
+            progress.check_cancelled()
+            progress.stage(stage, done, total)
+            yield pair
 
 
 def _default_workers(mode: Mode) -> int:
@@ -158,6 +178,7 @@ class _Job:
             frame_period = 1 / float(stream.average_rate or stream.guessed_rate or 30)
 
             for index in indices:
+                progress.check_cancelled()
                 ts = self.timestamps[index]
                 try:
                     container.seek(int(max(ts, 0) / stream.time_base), stream=stream, backward=True)

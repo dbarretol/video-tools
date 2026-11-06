@@ -36,6 +36,7 @@ from videocore.outputs import (
     remove_partials,
 )
 from videocore.probe import AudioStreamInfo, VideoInfo, VideoStreamInfo, format_hms, probe
+from videocore.progress import Cancelled, CancelToken, ProgressEvent
 
 __version__ = version("videocore")
 
@@ -46,11 +47,14 @@ __all__ = [
     "EXIT_USAGE",
     "AudioStreamInfo",
     "BatchResult",
+    "CancelToken",
+    "Cancelled",
     "ItemResult",
     "OutputCollisionError",
     "OutputSlot",
     "Plan",
     "PlannedItem",
+    "ProgressEvent",
     "RunOptions",
     "RunReport",
     "Status",

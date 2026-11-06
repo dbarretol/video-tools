@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import os
+import queue
 import signal
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -15,10 +16,15 @@ from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from typing import Any
 
+from videocore import progress
+from videocore.progress import Cancelled, ProgressEvent
+
 logger = logging.getLogger(__name__)
 
 # How often a parallel run checks `should_cancel` while workers are busy.
 CANCEL_POLL_SECONDS = 0.2
+CANCEL_GRACE_SECONDS = 5.0
+"""How long running items get to stop by themselves before their processes are killed."""
 
 VIDEO_EXTENSIONS = frozenset(
     {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".mpg", ".mpeg"}
@@ -44,6 +50,8 @@ class BatchResult:
     """Exception class name of a failed item."""
     seconds: float | None = None
     """Time spent processing the item."""
+    cancelled: bool = False
+    """Stopped by a cancel request before finishing; `ok` is False."""
 
 
 def find_videos(
@@ -117,6 +125,7 @@ def run_parallel(
     item_args: Sequence[Any] | None = None,
     workers: int | None = None,
     on_progress: Callable[[int, int, BatchResult], None] | None = None,
+    on_event: Callable[[ProgressEvent], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[BatchResult]:
     """Apply `fn` to every item, isolating failures, and return results in input order.
@@ -129,16 +138,23 @@ def run_parallel(
     Each worker receives only the value of its own item, so per-item data such
     as output paths does not have to be bound into `fn` for every item.
 
+    `on_event` receives the ``videocore.progress`` events of each item (started,
+    stage progress). With worker processes they are delivered in this thread;
+    inline they come from the thread that reports them, which may be a helper
+    thread of the task.
+
     `should_cancel()` is polled a few times per second. When it returns True,
-    or when this call is interrupted (e.g. Ctrl+C), worker processes are
-    terminated right away instead of finishing their current item, so nothing
-    keeps running in the background; unfinished items are left out of the
-    results and their outputs may be incomplete. Inline runs (one worker) can
-    only stop between items.
+    items not started are dropped and running ones are asked to stop: tasks
+    that call ``progress.check_cancelled`` stop at the next step, clean up and
+    come back with ``cancelled=True``. Processes still busy after
+    `CANCEL_GRACE_SECONDS` are killed. An interruption of this call (Ctrl+C)
+    is handled the same way and then propagates. Dropped and killed items are
+    left out of the results; their outputs may be incomplete.
 
     Log records emitted in worker processes are forwarded to the handlers of
     this process's root logger, so they end up in the same log file and console.
     """
+    global _channel
     workers = workers or default_workers()
     total = len(items)
     if item_args is not None and len(item_args) != total:
@@ -148,21 +164,39 @@ def run_parallel(
 
     def record(index: int, result: BatchResult) -> None:
         results[index] = result
+        if result.cancelled:
+            return
         if not result.ok:
             logger.warning("Failed to process %s: %s", result.item, result.error)
         if on_progress is not None:
             on_progress(len(results), total, result)
 
     if workers == 1 or total <= 1:
-        for index, args in enumerate(calls):
-            if should_cancel is not None and should_cancel():
-                break
-            record(index, _call(fn, *args))
+        previous, _channel = _channel, _Channel(on_event, should_cancel)
+        try:
+            for index, args in enumerate(calls):
+                if should_cancel is not None and should_cancel():
+                    break
+                record(index, _call(fn, *args))
+        finally:
+            _channel = previous
         return [results[i] for i in sorted(results)]
 
     context = multiprocessing.get_context("spawn")
+    events = context.Queue()
+    cancel = context.Event()
+
+    def deliver_events() -> None:
+        while True:
+            try:
+                event = events.get_nowait()
+            except queue.Empty:
+                return
+            if on_event is not None:
+                on_event(event)
+
     with (
-        _forward_worker_logs(context) as (initializer, initargs),
+        _forward_worker_logs(context, events, cancel) as (initializer, initargs),
         ProcessPoolExecutor(
             max_workers=min(workers, total),
             mp_context=context,
@@ -179,15 +213,37 @@ def run_parallel(
                 done, pending = wait(
                     pending, timeout=CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
                 )
+                deliver_events()
                 for future in done:
                     record(futures[future], future.result())
                 if pending and should_cancel is not None and should_cancel():
                     logger.info("Cancelled: stopping %d unfinished items", len(pending))
                     break
         finally:
-            if pending:
+            if pending and _wind_down(futures, pending, cancel, record):
                 _stop_workers(pool)
+            deliver_events()
+    events.close()
     return [results[i] for i in sorted(results)]
+
+
+def _wind_down(
+    futures: dict[Future[BatchResult], int],
+    pending: set[Future[BatchResult]],
+    cancel: Any,
+    record: Callable[[int, BatchResult], None],
+) -> set[Future[BatchResult]]:
+    """Ask running items to stop and wait a little for them; return those still running."""
+    cancel.set()
+    pending = {future for future in pending if not future.cancel()}
+    try:
+        done, pending = wait(pending, timeout=CANCEL_GRACE_SECONDS)
+    except KeyboardInterrupt:  # a second Ctrl+C: stop waiting
+        return pending
+    for future in done:
+        if future.exception() is None:
+            record(futures[future], future.result())
+    return pending
 
 
 def _stop_workers(pool: ProcessPoolExecutor) -> None:
@@ -208,27 +264,43 @@ def _stop_workers(pool: ProcessPoolExecutor) -> None:
 
 @contextmanager
 def _forward_worker_logs(
-    context: multiprocessing.context.SpawnContext,
+    context: multiprocessing.context.SpawnContext, events: Any, cancel: Any
 ) -> Iterator[tuple[Callable[..., None], tuple[Any, ...]]]:
-    """Yield a pool initializer that sends worker log records to this process's handlers."""
+    """Yield a pool initializer that sends worker log records to this process's handlers.
+
+    The initializer also hands each worker the progress queue and the cancel event.
+    """
     root = logging.getLogger()
     if not root.handlers:
-        yield _init_worker, (None, root.level)
+        yield _init_worker, (None, root.level, events, cancel)
         return
     log_queue = context.Queue()
     listener = QueueListener(log_queue, *root.handlers, respect_handler_level=True)
     listener.start()
     try:
-        yield _init_worker, (log_queue, root.level)
+        yield _init_worker, (log_queue, root.level, events, cancel)
     finally:
         listener.stop()
         log_queue.close()
 
 
-def _init_worker(log_queue: Any, level: int) -> None:
+@dataclass
+class _Channel:
+    """Where the items run by this process send their events and read cancel requests."""
+
+    emit: Callable[[ProgressEvent], None] | None
+    cancelled: Callable[[], bool] | None
+
+
+_channel: _Channel | None = None
+
+
+def _init_worker(log_queue: Any, level: int, events: Any, cancel: Any) -> None:
+    global _channel
     # Ctrl+C reaches every process attached to the console. Workers ignore it so
-    # the main process alone handles it: it terminates them and cleans up.
+    # the main process alone handles it: it asks them to stop and cleans up.
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _channel = _Channel(events.put, cancel.is_set)
     if log_queue is None:
         return
     root = logging.getLogger()
@@ -240,8 +312,16 @@ def _init_worker(log_queue: Any, level: int) -> None:
 
 def _call(fn: Callable[..., Any], item: Path, *args: Any) -> BatchResult:
     started = time.perf_counter()
+    channel = _channel or _Channel(None, None)
     try:
-        value = fn(item, *args)
+        with progress.reporting(item, channel.emit, channel.cancelled):
+            progress.check_cancelled()
+            value = fn(item, *args)
+    except Cancelled:
+        logger.info("Stopped %s", item)
+        return BatchResult(
+            item=item, ok=False, cancelled=True, seconds=time.perf_counter() - started
+        )
     except Exception as exc:  # noqa: BLE001 - one failing video must not abort the batch
         logger.debug("Details of the failure of %s", item, exc_info=True)
         return BatchResult(
