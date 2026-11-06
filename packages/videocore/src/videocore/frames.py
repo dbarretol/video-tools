@@ -42,7 +42,7 @@ import av
 from PIL import Image
 
 from videocore import progress
-from videocore.errors import VideoOpenError
+from videocore.errors import NoVideoStreamError, VideoOpenError
 
 Mode = Literal["keyframe", "precise"]
 
@@ -238,7 +238,7 @@ class _Job:
             raise VideoOpenError(f"Could not open video: {self.path}") from exc
         if not container.streams.video:
             container.close()
-            raise VideoOpenError(f"No video stream in {self.path}")
+            raise NoVideoStreamError(f"No video stream in {self.path}")
         stream = container.streams.video[0]
         self._configure(stream)
         return _Seeker(self, container, stream)

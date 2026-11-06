@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from videocore import progress
+from videocore.errors import hint_for
 from videocore.progress import Cancelled, ProgressEvent
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ class BatchResult:
     """Time spent processing the item."""
     cancelled: bool = False
     """Stopped by a cancel request before finishing; `ok` is False."""
+    hint: str | None = None
+    """What the user can do about the error (see ``videocore.errors.hint_for``)."""
 
 
 def find_videos(
@@ -330,5 +333,6 @@ def _call(fn: Callable[..., Any], item: Path, *args: Any) -> BatchResult:
             error=f"{type(exc).__name__}: {exc}",
             error_type=type(exc).__name__,
             seconds=time.perf_counter() - started,
+            hint=hint_for(exc, offline=is_offline(item)),
         )
     return BatchResult(item=item, ok=True, value=value, seconds=time.perf_counter() - started)

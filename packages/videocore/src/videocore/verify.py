@@ -23,6 +23,8 @@ DEGRADED_BELOW = 0.9
 class OutputError(RuntimeError):
     """An output is missing or unreadable after being written."""
 
+    hint = "check that the output folder's disk is not failing or full, then run again"
+
 
 @dataclass
 class FrameCount:

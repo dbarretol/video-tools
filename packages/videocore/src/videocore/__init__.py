@@ -9,8 +9,11 @@ from videocore.errors import (
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
+    NoFramesError,
+    NoVideoStreamError,
     UsageError,
     VideoOpenError,
+    hint_for,
 )
 from videocore.frames import evenly_spaced, iter_frames, sample_frames
 from videocore.grid import compose_grid
@@ -53,6 +56,8 @@ __all__ = [
     "CancelToken",
     "Cancelled",
     "ItemResult",
+    "NoFramesError",
+    "NoVideoStreamError",
     "OutputCollisionError",
     "OutputSlot",
     "Plan",
@@ -76,6 +81,7 @@ __all__ = [
     "execute",
     "find_videos",
     "format_hms",
+    "hint_for",
     "iter_frames",
     "output_folder",
     "part_path",

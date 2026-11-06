@@ -287,6 +287,8 @@ class ItemResult:
     seconds: float | None = None
     problems: list[str] = field(default_factory=list)
     """Why a DEGRADED video's outputs are incomplete."""
+    hint: str | None = None
+    """What the user can do about a failure, e.g. "the disk is full; ..."."""
 
     @property
     def ok(self) -> bool:
@@ -453,6 +455,7 @@ def _item_result(result: BatchResult, output: Path) -> ItemResult:
         error_type=result.error_type,
         seconds=result.seconds,
         problems=outcome.problems,
+        hint=result.hint,
     )
 
 
