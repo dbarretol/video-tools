@@ -42,6 +42,7 @@ from videocore import (
     hint_for,
     plan,
 )
+from videocore.commands import configured, with_default_task
 from videocore.config import Values, add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
@@ -208,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
 
     argv, deprecation = translate_legacy(argv)
+    argv = with_default_task(argv, COMMAND_NAMES, lambda: default_task(argv))
     parser = build_parser()
     try:
         args = parser.parse_args(argv)  # exits with 2 on invalid arguments
@@ -236,7 +238,8 @@ def run(args: argparse.Namespace, console: Console) -> int:
         if config_path is not None:
             logger.debug("Using defaults from %s", config_path)
         values = CONFIG.load(config_path)
-        args.desktop.configure(ConsoleOptions(**values.get(CONSOLE_SECTION, {})))
+        console_values = values.get(CONSOLE_SECTION, {})
+        args.desktop.configure(ConsoleOptions(**CONSOLE.pick(ConsoleOptions, console_values)))
         mode, options = Mode(args.mode), build_options(args, values)
         settings = values.get(RUN_SECTION, {}) | given_values(RunOptions, args)
         settings.pop("output", None)  # -o is not a config option; it is read below
@@ -264,6 +267,15 @@ def run(args: argparse.Namespace, console: Console) -> int:
         console.error(str(exc))
         console.hint(hint, args.log_file)
         return EXIT_FAILED
+
+
+COMMAND_NAMES = ("sheet", "frames", "pack", "gui", "config", "snapshots")
+CONSOLE = CONFIG.section(CONSOLE_SECTION)
+
+
+def default_task(argv: list[str]) -> str:
+    """The command run when none is given: ``console.default_task`` of the config file."""
+    return configured(CONFIG, argv, CONSOLE_SECTION, "default_task")
 
 
 MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions] | type[PackOptions]] = {
