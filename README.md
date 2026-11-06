@@ -9,7 +9,8 @@ Python tools for previewing and archiving video files, built on [PyAV](https://p
 | [**videosemanticreducer**](packages/videosemanticreducer) | Archives videos before you delete them: a short summary video, a thumbnail grid, a metadata report and a perceptual fingerprint that can later tell whether another file is the same video. Command line. |
 
 Both share [**videocore**](packages/videocore), a small library for probing videos, sampling frames,
-composing grids and processing folders in parallel.
+composing grids and processing folders in parallel, and [**videoconsole**](packages/videoconsole),
+which draws their progress and reports in the terminal.
 
 ## Requirements
 
@@ -57,6 +58,15 @@ videosemanticreducer verify downloaded.mp4 movie_summary/movie.fingerprint.json
 Each tool's README documents every option: [videothumb](packages/videothumb/README.md),
 [videosemanticreducer](packages/videosemanticreducer/README.md).
 
+While a folder is processed, the terminal shows a bar for the whole batch (with the time
+remaining) and one row per video being processed, with the stage it is in; each finished video
+leaves one line. When the output is redirected, only those lines are printed. Both tools accept:
+
+- `-q/--quiet`: only warnings, errors and what to do about them (nothing at all when every video
+  succeeds);
+- `-v/--verbose`: debug messages as well. Without it, log messages only go to the log file, in
+  `%LOCALAPPDATA%\<tool>\logs`.
+
 Both tools use the same exit codes, so scripts can tell what happened:
 
 | Code | Meaning |
@@ -103,6 +113,7 @@ Folders are processed in parallel processes; one failing file never stops the re
 ```
 packages/
   videocore/              shared library (probe, frame sampling, grids, batch, logging)
+  videoconsole/           terminal output of the command lines (rich): progress and reports
   videothumb/             contact sheets and snapshots: CLI + tkinter desktop app
   videosemanticreducer/   archive pipeline, fingerprints, compare/verify
 benchmarks/               timing harness (bench.py) and drivers for the tools

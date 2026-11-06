@@ -26,7 +26,11 @@ videosemanticreducer status D:/Videos -o D:/Archive --full
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
 `-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing` (default) / `--overwrite`,
 `--dry-run`.
-`-v/--verbose` shows debug messages and works before or after the command name.
+`-v/--verbose` also shows debug messages, including the stage each video is in, and `-q/--quiet`
+only shows warnings, errors and what to do about them; both work before or after the command
+name. Log messages always go to the log file. In a terminal, `process` shows a progress bar for
+the folder and one row per video being archived, with its current stage. `status -q` only lists
+the archives that are not ready.
 
 Videos whose archive is already complete are skipped, so an interrupted or partly failed run over
 a folder can simply be started again. A video is archived again when its manifest is missing or

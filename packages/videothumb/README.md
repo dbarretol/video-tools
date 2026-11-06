@@ -34,9 +34,13 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 | `--overwrite` / `--skip-existing` | Replace existing outputs, or leave videos whose sheet or snapshot folder already exists | `--overwrite` |
 | `--dry-run` | Show what would be done for each video, without processing anything | off |
 | `--strict` | Treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1) | off |
+| `-q`, `--quiet` | Only show warnings, errors and what to do about them | off |
+| `-v`, `--verbose` | Also show debug messages (they always go to the log file) | off |
 
 With `--folder`, a plan is printed first: videos to process and already done, the length of
-video to process and a rough time estimate.
+video to process and a rough time estimate. In a terminal, a progress bar for the folder and one
+row per video being processed follow; each finished video leaves one line, and a summary ends the
+run.
 
 Each sheet and snapshot is read back after being written. When fewer than 90% of its frames
 could be decoded, the video is reported as DEGRADED (incomplete) instead of succeeded, and the
