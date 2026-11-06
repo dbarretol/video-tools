@@ -21,12 +21,14 @@ import logging
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
 from videocore.batch import BatchResult, default_workers, is_offline, run_parallel
-from videocore.errors import EXIT_DEGRADED, EXIT_FAILED, EXIT_OK
+from videocore.errors import EXIT_DEGRADED, EXIT_FAILED, EXIT_INTERRUPTED, EXIT_OK
+from videocore.logging_setup import default_log_dir
 from videocore.options import option, validate
 from videocore.outputs import OutputSlot, plan_outputs
 from videocore.probe import format_hms, probe
@@ -35,6 +37,8 @@ from videocore.progress import ProgressEvent
 logger = logging.getLogger(__name__)
 
 PROBE_THREADS = 8
+KEPT_RUN_LISTS = 20
+"""Runs whose retry lists are kept in the runs folder; older ones are deleted."""
 PARALLEL_GAIN = 0.7
 """N videos in parallel finish about N**PARALLEL_GAIN times faster than one after another."""
 
@@ -301,6 +305,8 @@ class RunReport:
     plan: Plan[Any]
     items: list[ItemResult] = field(default_factory=list)
     """One result per planned video, in plan order."""
+    interrupted: bool = False
+    """Stopped with Ctrl+C; the unfinished videos are CANCELLED."""
 
     def count(self, status: Status) -> int:
         return sum(item.status is status for item in self.items)
@@ -321,8 +327,15 @@ class RunReport:
     def exit_code(self) -> int:
         return self.exit_status()
 
+    @property
+    def unfinished(self) -> list[ItemResult]:
+        return [item for item in self.items if item.status is Status.CANCELLED]
+
     def exit_status(self, *, strict: bool = False) -> int:
-        """1 if a video failed, 3 if some are DEGRADED (1 with `strict`), else 0."""
+        """130 if interrupted, 1 if a video failed, 3 if some are DEGRADED (1 with `strict`),
+        else 0."""
+        if self.interrupted:
+            return EXIT_INTERRUPTED
         if self.failed:
             return EXIT_FAILED
         if self.degraded:
@@ -364,16 +377,20 @@ def execute[T](
     and `on_event` receives the progress events from inside each video (see
     ``videocore.batch.run_parallel``). When `should_cancel()` returns True,
     running videos stop at their next step; every unfinished item is reported
-    as CANCELLED. Unfinished files are removed even when this call is
-    interrupted (Ctrl+C), which then propagates.
+    as CANCELLED. Ctrl+C does the same and returns the report with
+    ``interrupted=True`` instead of raising, so the caller can say what was
+    finished. Unfinished files are removed in every case.
     """
     pending = planned.pending
     # Videos already run in parallel; one decoder per video avoids oversubscription.
     decoders = 1 if planned.workers > 1 else None
     fn = functools.partial(_run_item, task=planned.task, options=planned.options, decoders=decoders)
     outputs = {item.video: item.output for item in pending}
+    reported: list[BatchResult] = []
+    interrupted = False
 
     def progress(done: int, total: int, result: BatchResult) -> None:
+        reported.append(result)
         if on_progress is not None:
             on_progress(done, total, _item_result(result, outputs[result.item]))
 
@@ -387,13 +404,16 @@ def execute[T](
             on_event=on_event,
             should_cancel=should_cancel,
         )
+    except KeyboardInterrupt:
+        interrupted, finished = True, reported
+        logger.info("Interrupted after %d of %d videos", len(reported), len(pending))
     finally:
         # Workers killed on cancel or Ctrl+C leave their unfinished files behind.
         for item in pending:
             planned.task.cleanup(item.output)
 
     by_video = {result.item: result for result in finished}
-    report = RunReport(planned)
+    report = RunReport(planned, interrupted=interrupted)
     for item in planned.items:
         if item.state is not None:
             report.items.append(ItemResult(item.video, item.output, item.state))
@@ -402,6 +422,68 @@ def execute[T](
         else:
             report.items.append(ItemResult(item.video, item.output, Status.CANCELLED))
     return report
+
+
+@dataclass(frozen=True)
+class RunLists:
+    """Files listing the videos of a run to retry, one path per line."""
+
+    failed: Path | None = None
+    """Videos that failed or whose outputs are incomplete."""
+    pending: Path | None = None
+    """Videos not finished because the run was cancelled or interrupted."""
+
+
+def default_runs_dir(app: str) -> Path:
+    """%LOCALAPPDATA%/<app>/runs on Windows, $XDG_STATE_HOME/<app>/runs elsewhere."""
+    return default_log_dir(app).parent / "runs"
+
+
+def write_run_lists(
+    report: RunReport, folder: Path, *, title: str, now: datetime | None = None
+) -> RunLists:
+    """Write ``<time>_<task>_failed.txt`` and ``..._pending.txt`` into `folder` when needed.
+
+    Each file has one absolute path per line and ``#`` comments, in UTF-8 with a
+    BOM so that PowerShell 5.1 reads it correctly. `title` describes the run in
+    the first line (e.g. the command). Only the lists of the newest
+    `KEPT_RUN_LISTS` runs are kept. Errors writing them are logged and ignored.
+    """
+    now = now or datetime.now()
+    stamp = f"{now:%Y%m%d-%H%M%S}_{report.plan.task.name}"
+    header = [f"# {title}", f"# {now:%Y-%m-%d %H:%M}"]
+    failed = [*report.failed, *report.degraded]
+    lists = {}
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        if failed:
+            lines = [*header, "# Videos that failed or whose outputs are incomplete:"]
+            for item in failed:
+                reason = item.error if item.status is Status.FAILED else "; ".join(item.problems)
+                lines += [f"# {item.status.upper()}: {reason}", str(item.video.resolve())]
+            lists["failed"] = _write_list(folder / f"{stamp}_failed.txt", lines)
+        if unfinished := report.unfinished:
+            lines = [*header, "# Videos not finished:"]
+            lines += [str(item.video.resolve()) for item in unfinished]
+            lists["pending"] = _write_list(folder / f"{stamp}_pending.txt", lines)
+        _prune_run_lists(folder)
+    except OSError:
+        logger.warning("Could not write the lists of videos to retry in %s", folder, exc_info=True)
+    return RunLists(**lists)
+
+
+def _write_list(path: Path, lines: list[str]) -> Path:
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
+    return path
+
+
+def _prune_run_lists(folder: Path) -> None:
+    lists = sorted(folder.glob("*_failed.txt")) + sorted(folder.glob("*_pending.txt"))
+    runs = sorted({path.name.split("_", 1)[0] for path in lists}, reverse=True)
+    old = set(runs[KEPT_RUN_LISTS:])
+    for path in lists:
+        if path.name.split("_", 1)[0] in old:
+            path.unlink(missing_ok=True)
 
 
 def run_task[T](

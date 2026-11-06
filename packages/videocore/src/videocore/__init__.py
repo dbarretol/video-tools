@@ -21,13 +21,16 @@ from videocore.jobs import (
     ItemResult,
     Plan,
     PlannedItem,
+    RunLists,
     RunOptions,
     RunReport,
     Status,
     Task,
+    default_runs_dir,
     execute,
     plan,
     run_task,
+    write_run_lists,
 )
 from videocore.logging_setup import configure_logging, default_log_dir
 from videocore.outputs import (
@@ -63,6 +66,7 @@ __all__ = [
     "Plan",
     "PlannedItem",
     "ProgressEvent",
+    "RunLists",
     "RunOptions",
     "RunReport",
     "State",
@@ -76,6 +80,7 @@ __all__ = [
     "compose_grid",
     "configure_logging",
     "default_log_dir",
+    "default_runs_dir",
     "default_workers",
     "evenly_spaced",
     "execute",
@@ -92,4 +97,5 @@ __all__ = [
     "run_parallel",
     "run_task",
     "sample_frames",
+    "write_run_lists",
 ]
