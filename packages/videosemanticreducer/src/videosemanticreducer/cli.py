@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import logging
 import os
 from pathlib import Path
@@ -20,16 +19,19 @@ from videocore import (
     find_videos,
     probe,
 )
+from videocore.options import add_arguments, given_values
 from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
 from videosemanticreducer.config import (
     CONFIG_ENV,
     ConfigError,
     ProcessDefaults,
+    RunDefaults,
     default_config_path,
     find_config,
     load_config,
     render_template,
+    split_values,
 )
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
 from videosemanticreducer.pipeline import (
@@ -43,29 +45,8 @@ from videosemanticreducer.pipeline import (
 )
 
 APP_NAME = "videosemanticreducer"
-BUILTIN = ProcessDefaults()
 
 logger = logging.getLogger(__name__)
-
-
-def positive_int(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
-    if value <= 0:
-        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
-    return value
-
-
-def positive_float(text: str) -> float:
-    try:
-        value = float(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"expected a number, got {text!r}") from None
-    if value <= 0:
-        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
-    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,39 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Defaults shown are the built-in ones; a config file can change them.",
     )
     process.add_argument("input", type=Path, help="video file or folder")
-    process.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help=(
-            "output folder (default: <stem>_summary next to each video); "
-            "with -r, subfolders are recreated inside it"
-        ),
-    )
-    process.add_argument(
-        "-n", "--num-snapshots", type=positive_int, help=f"default: {BUILTIN.num_snapshots}"
-    )
-    process.add_argument(
-        "-d",
-        "--snap-duration",
-        type=positive_float,
-        help=f"seconds each snapshot is shown in the summary (default: {BUILTIN.snap_duration})",
-    )
-    process.add_argument("--thumb-cols", type=positive_int, help=f"default: {BUILTIN.thumb_cols}")
-    process.add_argument("--thumb-rows", type=positive_int, help=f"default: {BUILTIN.thumb_rows}")
-    toggle = argparse.BooleanOptionalAction
-    process.add_argument(
-        "--video", dest="summary", action=toggle, help="summary video (default: on)"
-    )
-    process.add_argument("--thumbnail", action=toggle, help="thumbnail grid (default: on)")
-    process.add_argument("--fingerprint", action=toggle, help="fingerprint (default: on)")
-    process.add_argument("-r", "--recursive", action=toggle, help="include subfolders")
-    process.add_argument(
-        "-w",
-        "--workers",
-        type=positive_int,
-        help=f"videos processed in parallel for folders (default: {default_workers()})",
-    )
+    add_arguments(process, RunDefaults, ProcessOptions)
     existing = process.add_mutually_exclusive_group()
     existing.add_argument(
         "--skip-existing",
@@ -237,35 +186,19 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
     config_path = find_config(args.config)
     if config_path is not None:
         logger.info("Using defaults from %s", config_path)
-    given = {
-        field.name: getattr(args, field.name)
-        for field in dataclasses.fields(ProcessDefaults)
-        if getattr(args, field.name) is not None
-    }
-    return dataclasses.replace(load_config(config_path), **given)
+    given = given_values(ProcessOptions, args) | given_values(RunDefaults, args)
+    try:
+        return split_values(given, load_config(config_path))
+    except ValueError as exc:  # flags are checked by argparse, so this is unexpected
+        raise UsageError(f"Invalid settings: {exc}") from exc
 
 
 def cmd_process(args: argparse.Namespace) -> int:
     settings = process_settings(args)
-    try:
-        options = ProcessOptions(
-            num_snapshots=settings.num_snapshots,
-            snap_duration=settings.snap_duration,
-            thumb_cols=settings.thumb_cols,
-            thumb_rows=settings.thumb_rows,
-            summary=settings.summary,
-            thumbnail=settings.thumbnail,
-            fingerprint=settings.fingerprint,
-        )
-    except ValueError as exc:  # reachable through config values; flags are checked by argparse
-        raise UsageError(f"Invalid settings: {exc}") from exc
-    if settings.workers is not None and settings.workers <= 0:
-        raise UsageError(
-            f"Invalid settings: workers must be greater than 0, got {settings.workers}"
-        )
+    options, run = settings.options, settings.run
 
     if args.input.is_file():
-        output = resolve_output_dir(args.input, settings.output, batch=False)
+        output = resolve_output_dir(args.input, run.output, batch=False)
         state = None if args.overwrite else archive_state(output, args.input.stem, options)
         if state is not None:
             how = "with other settings" if state == ARCHIVE_OUTDATED else "already"
@@ -278,11 +211,11 @@ def cmd_process(args: argparse.Namespace) -> int:
     if not args.input.is_dir():
         raise UsageError(f"Input not found: {args.input}")
 
-    videos = find_videos(args.input, recursive=settings.recursive, skip_dir=is_output_dir)
+    videos = find_videos(args.input, recursive=run.recursive, skip_dir=is_output_dir)
     if not videos:
         logger.warning("No videos found in %s", args.input)
         return EXIT_OK
-    workers = settings.workers or default_workers()
+    workers = run.workers or default_workers()
     logger.info("Found %d videos; up to %d processed in parallel", len(videos), workers)
 
     def progress(done: int, total: int, result: BatchResult) -> None:
@@ -291,7 +224,7 @@ def cmd_process(args: argparse.Namespace) -> int:
 
     results = process_batch(
         videos,
-        settings.output,
+        run.output,
         options,
         source=args.input,
         skip_complete=not args.overwrite,
@@ -337,8 +270,9 @@ def cmd_config_init(args: argparse.Namespace) -> int:
 
 def cmd_config_show(args: argparse.Namespace) -> int:
     path = find_config(args.config)
+    defaults = load_config(path)  # before printing anything, so errors come alone
     print(f"# Source: {path or 'built-in defaults (no config file found)'}")
-    print(render_template(load_config(path)), end="")
+    print(render_template(defaults), end="")
     return 0
 
 

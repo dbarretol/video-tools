@@ -43,6 +43,7 @@ from videocore import (
     run_parallel,
     sample_frames,
 )
+from videocore.options import option, validate
 from videosemanticreducer import fingerprint as fp
 from videosemanticreducer.info_card import render_info_card
 from videosemanticreducer.manifest import (
@@ -68,23 +69,46 @@ OUTPUT_DIR_SUFFIX = "_summary"
 
 @dataclass(frozen=True)
 class ProcessOptions:
-    num_snapshots: int = 150
-    snap_duration: float = 0.4
-    thumb_cols: int = 12
-    thumb_rows: int = 12
-    summary: bool = True
-    thumbnail: bool = True
-    fingerprint: bool = True
+    """What to produce for each video. Each option is also a flag and a config key."""
+
+    num_snapshots: int = option(
+        150,
+        "snapshots in the summary video",
+        flags=("-n", "--num-snapshots"),
+        gt=0,
+        label="Snapshots",
+        group="summary video",
+    )
+    snap_duration: float = option(
+        0.4,
+        "seconds each snapshot is shown in the summary",
+        flags=("-d", "--snap-duration"),
+        gt=0,
+        label="Seconds per snapshot",
+        group="summary video",
+    )
+    thumb_cols: int = option(
+        12, "thumbnail grid columns", gt=0, label="Columns", group="thumbnail grid"
+    )
+    thumb_rows: int = option(12, "thumbnail grid rows", gt=0, label="Rows", group="thumbnail grid")
+    summary: bool = option(
+        True,
+        "create <name>_summary.mp4",
+        flags=("--video",),
+        label="Summary video",
+        group="artifacts",
+    )
+    thumbnail: bool = option(
+        True, "create <name>_thumb.jpg", label="Thumbnail grid", group="artifacts"
+    )
+    fingerprint: bool = option(
+        True, "create <name>.fingerprint.json", label="Fingerprint", group="artifacts"
+    )
     sampling_workers: int | None = None
     """Containers decoding in parallel per video; use 1 when processing videos in parallel."""
 
     def __post_init__(self) -> None:
-        if self.num_snapshots <= 0:
-            raise ValueError("num_snapshots must be greater than 0")
-        if self.snap_duration <= 0:
-            raise ValueError("snap_duration must be greater than 0")
-        if self.thumb_cols <= 0 or self.thumb_rows <= 0:
-            raise ValueError("thumb_cols and thumb_rows must be greater than 0")
+        validate(self)
 
 
 @dataclass

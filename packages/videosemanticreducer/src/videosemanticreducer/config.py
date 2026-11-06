@@ -10,15 +10,17 @@ then the built-in defaults below. The config file is, in order of preference:
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
 from videocore import UsageError
+from videocore.options import option, options_of, parse_mapping, validate
+from videosemanticreducer.pipeline import ProcessOptions
 
 APP_NAME = "videosemanticreducer"
 CONFIG_ENV = "VIDEOSEMANTICREDUCER_CONFIG"
@@ -26,46 +28,38 @@ SECTION = "process"
 
 
 @dataclass(frozen=True)
+class RunDefaults:
+    """How to run `process`; unlike `ProcessOptions`, these do not change the archive."""
+
+    output: Path | None = option(
+        None,
+        "output folder; with -r, subfolders are recreated inside it "
+        "(in the config file, relative to the file)",
+        flags=("-o", "--output"),
+        default_text="a <name>_summary folder next to each video",
+    )
+    workers: int | None = option(
+        None,
+        "videos processed in parallel for folders",
+        flags=("-w", "--workers"),
+        gt=0,
+        default_text="automatic",
+        advanced=True,
+    )
+    recursive: bool = option(
+        False, "include subfolders when processing a folder", flags=("-r", "--recursive")
+    )
+
+    def __post_init__(self) -> None:
+        validate(self)
+
+
+@dataclass(frozen=True)
 class ProcessDefaults:
-    num_snapshots: int = 150
-    snap_duration: float = 0.4
-    thumb_cols: int = 12
-    thumb_rows: int = 12
-    summary: bool = True
-    thumbnail: bool = True
-    fingerprint: bool = True
-    output: Path | None = None
-    workers: int | None = None
-    recursive: bool = False
+    """The defaults of `process`: built-in ones, changed by the config file."""
 
-
-# What each value means, written as comments in the template.
-DESCRIPTIONS = {
-    "num_snapshots": "snapshots in the summary video",
-    "snap_duration": "seconds each snapshot is shown",
-    "thumb_cols": "thumbnail grid columns",
-    "thumb_rows": "thumbnail grid rows",
-    "summary": "create <stem>_summary.mp4",
-    "thumbnail": "create <stem>_thumb.jpg",
-    "fingerprint": "create <stem>.fingerprint.json",
-    "output": "output folder; null = a <stem>_summary folder next to each video. "
-    "Relative paths are relative to this file",
-    "workers": "videos processed in parallel for folders; null = automatic",
-    "recursive": "include subfolders when processing a folder",
-}
-
-_TYPES: dict[str, tuple[type, ...]] = {
-    "num_snapshots": (int,),
-    "snap_duration": (int, float),
-    "thumb_cols": (int,),
-    "thumb_rows": (int,),
-    "summary": (bool,),
-    "thumbnail": (bool,),
-    "fingerprint": (bool,),
-    "output": (str, type(None)),
-    "workers": (int, type(None)),
-    "recursive": (bool,),
-}
+    options: ProcessOptions = field(default_factory=ProcessOptions)
+    run: RunDefaults = field(default_factory=RunDefaults)
 
 
 class ConfigError(UsageError):
@@ -112,25 +106,27 @@ def load_config(path: Path | None) -> ProcessDefaults:
     section = data.get(SECTION) or {}
     if not isinstance(section, dict):
         raise ConfigError(f"{path}: '{SECTION}' must be a mapping of option: value")
+    try:
+        values = parse_mapping([ProcessOptions, RunDefaults], section)
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from None
 
-    values: dict[str, Any] = {}
-    for key, value in section.items():
-        if key not in _TYPES:
-            valid = ", ".join(_TYPES)
-            raise ConfigError(f"{path}: unknown option '{key}' (valid options: {valid})")
-        expected = _TYPES[key]
-        # bool is a subclass of int: reject `true` where a number is expected.
-        if not isinstance(value, expected) or (isinstance(value, bool) and bool not in expected):
-            names = " or ".join("null" if t is type(None) else t.__name__ for t in expected)
-            raise ConfigError(f"{path}: '{key}' must be {names}, got {value!r}")
-        values[key] = value
+    if values.get("output") is not None and not values["output"].is_absolute():
+        values["output"] = path.parent / values["output"]
+    return split_values(values)
 
-    if values.get("output") is not None:
-        output = Path(values["output"]).expanduser()
-        values["output"] = output if output.is_absolute() else path.parent / output
-    if "snap_duration" in values:
-        values["snap_duration"] = float(values["snap_duration"])
-    return ProcessDefaults(**values)
+
+def split_values(values: dict, base: ProcessDefaults | None = None) -> ProcessDefaults:
+    """`base` (built-in defaults by default) with `values` applied, by field name."""
+    base = base or ProcessDefaults()
+
+    def pick(cls: type) -> dict:
+        return {opt.name: values[opt.name] for opt in options_of(cls) if opt.name in values}
+
+    return ProcessDefaults(
+        options=dataclasses.replace(base.options, **pick(ProcessOptions)),
+        run=dataclasses.replace(base.run, **pick(RunDefaults)),
+    )
 
 
 def render_template(defaults: ProcessDefaults | None = None) -> str:
@@ -141,11 +137,15 @@ def render_template(defaults: ProcessDefaults | None = None) -> str:
         "# Command-line flags override these values; delete a line to use the built-in default.",
         f"{SECTION}:",
     ]
-    for field in fields(ProcessDefaults):
-        value = getattr(defaults, field.name)
-        rendered = yaml.safe_dump(
-            str(value) if isinstance(value, Path) else value, default_flow_style=True
-        )
-        rendered = rendered.strip().removesuffix("...").strip()
-        lines.append(f"  {field.name}: {rendered}  # {DESCRIPTIONS[field.name]}")
+    for settings in (defaults.options, defaults.run):
+        for opt in options_of(type(settings)):
+            value = getattr(settings, opt.name)
+            rendered = yaml.safe_dump(
+                str(value) if isinstance(value, Path) else value, default_flow_style=True
+            )
+            rendered = rendered.strip().removesuffix("...").strip()
+            comment = opt.spec.help
+            if opt.optional and opt.spec.default_text:
+                comment += f"; null = {opt.spec.default_text}"
+            lines.append(f"  {opt.name}: {rendered}  # {comment}")
     return "\n".join(lines) + "\n"
