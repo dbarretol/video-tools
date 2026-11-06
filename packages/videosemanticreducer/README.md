@@ -23,6 +23,16 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
 `-r/--recursive`, `-w/--workers`, `-o/--output`.
 
+Folder scans skip hidden files and folders (such as macOS `._movie.mp4` files), and recursive scans
+skip the `<stem>_summary` folders written by earlier runs, so summary videos are never archived
+again.
+
+A video only counts as archived when its fingerprint is complete, since the fingerprint is what
+later proves that a copy is the same video. The run reports a failure, and writes no fingerprint,
+when the file has no video stream, when no frame could be hashed for the global hashes, or when
+fewer than half of the per-position frames could be hashed. Partial summaries and grids are
+reported as warnings.
+
 ## Default settings
 
 The defaults of `process` can be changed in a YAML file instead of passing the same flags every
