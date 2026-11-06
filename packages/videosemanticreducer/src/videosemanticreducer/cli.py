@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 from pathlib import Path
@@ -12,11 +13,15 @@ from videocore import (
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
-    BatchResult,
+    ItemResult,
+    Plan,
+    RunOptions,
+    Status,
     UsageError,
     configure_logging,
-    default_workers,
+    execute,
     find_videos,
+    plan,
     probe,
 )
 from videocore.options import add_arguments, given_values
@@ -26,7 +31,6 @@ from videosemanticreducer.config import (
     CONFIG_ENV,
     ConfigError,
     ProcessDefaults,
-    RunDefaults,
     default_config_path,
     find_config,
     load_config,
@@ -35,12 +39,9 @@ from videosemanticreducer.config import (
 )
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
 from videosemanticreducer.pipeline import (
-    ARCHIVE_OUTDATED,
+    ARCHIVE,
     ProcessOptions,
-    archive_state,
     is_output_dir,
-    process_batch,
-    process_video,
     resolve_output_dir,
 )
 
@@ -88,7 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Defaults shown are the built-in ones; a config file can change them.",
     )
     process.add_argument("input", type=Path, help="video file or folder")
-    add_arguments(process, RunDefaults, ProcessOptions)
+    add_arguments(process, RunOptions, ProcessOptions)
+    process.add_argument(
+        "--dry-run", action="store_true", help="show what would be done, without archiving"
+    )
     existing = process.add_mutually_exclusive_group()
     existing.add_argument(
         "--skip-existing",
@@ -186,7 +190,7 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
     config_path = find_config(args.config)
     if config_path is not None:
         logger.info("Using defaults from %s", config_path)
-    given = given_values(ProcessOptions, args) | given_values(RunDefaults, args)
+    given = given_values(ProcessOptions, args) | given_values(RunOptions, args)
     try:
         return split_values(given, load_config(config_path))
     except ValueError as exc:  # flags are checked by argparse, so this is unexpected
@@ -195,18 +199,27 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
 
 def cmd_process(args: argparse.Namespace) -> int:
     settings = process_settings(args)
-    options, run = settings.options, settings.run
+    options = settings.options
+    run = dataclasses.replace(settings.run, overwrite=args.overwrite)
 
     if args.input.is_file():
         output = resolve_output_dir(args.input, run.output, batch=False)
-        state = None if args.overwrite else archive_state(output, args.input.stem, options)
-        if state is not None:
-            how = "with other settings" if state == ARCHIVE_OUTDATED else "already"
+        planned = plan(ARCHIVE, [args.input], options, run, outputs=[output], measure=args.dry_run)
+        if args.dry_run:
+            print_plan(planned)
+            return EXIT_OK
+        if not planned.pending:
+            how = "already" if planned.items[0].state is Status.SKIPPED else "with other settings"
             logger.info(
                 "%s is %s archived in %s; use --overwrite to redo it", args.input, how, output
             )
             return EXIT_OK
-        process_video(args.input, output, options)
+        (result,) = execute(planned).items
+        if result.status is Status.CANCELLED:
+            raise KeyboardInterrupt
+        if result.status is Status.FAILED:
+            logger.error("Could not archive %s: %s", args.input, result.error)
+            return EXIT_FAILED
         return EXIT_OK
     if not args.input.is_dir():
         raise UsageError(f"Input not found: {args.input}")
@@ -215,38 +228,39 @@ def cmd_process(args: argparse.Namespace) -> int:
     if not videos:
         logger.warning("No videos found in %s", args.input)
         return EXIT_OK
-    workers = run.workers or default_workers()
-    logger.info("Found %d videos; up to %d processed in parallel", len(videos), workers)
+    planned = plan(ARCHIVE, videos, options, run, source=args.input)
+    if args.dry_run:
+        print_plan(planned)
+        return EXIT_OK
+    for line in planned.summary():
+        logger.info(line)
+    if planned.pending:
+        logger.info("Up to %d videos processed in parallel", planned.workers)
 
-    def progress(done: int, total: int, result: BatchResult) -> None:
+    def progress(done: int, total: int, result: ItemResult) -> None:
         status = "ok" if result.ok else "FAILED"
-        logger.info("[%d/%d] %s: %s", done, total, result.item.name, status)
+        logger.info("[%d/%d] %s: %s", done, total, result.video.name, status)
 
-    results = process_batch(
-        videos,
-        run.output,
-        options,
-        source=args.input,
-        skip_complete=not args.overwrite,
-        workers=workers,
-        on_progress=progress,
-    )
-    failed = [r for r in results if not r.ok]
-    skipped = sum(r.skipped for r in results)
-    outdated = sum(r.detail == ARCHIVE_OUTDATED for r in results)
-    archived = len(results) - len(failed) - skipped
-    summary = f"Done: {archived} archived, {skipped - outdated} already archived"
+    report = execute(planned, on_progress=progress)
+    failed = report.failed
+    skipped, outdated = report.count(Status.SKIPPED), report.count(Status.OUTDATED)
+    summary = f"Done: {report.count(Status.OK)} archived, {skipped} already archived"
     if outdated:
         summary += f", {outdated} archived with other settings (not redone)"
     summary += f", {len(failed)} failed"
-    if len(results) < len(videos):
-        summary += f", {len(videos) - len(results)} not started"
+    if cancelled := report.count(Status.CANCELLED):
+        summary += f", {cancelled} not started"
     logger.info(summary)
-    if skipped:
+    if skipped or outdated:
         logger.info("Use --overwrite to archive the skipped videos again")
     for result in failed:
-        logger.error("Failed: %s (%s)", result.item, result.error)
-    return EXIT_FAILED if failed else EXIT_OK
+        logger.error("Failed: %s (%s)", result.video, result.error)
+    return report.exit_code
+
+
+def print_plan(planned: Plan) -> None:
+    for line in [*planned.summary(), *planned.item_lines()]:
+        print(line)
 
 
 def config_target(args: argparse.Namespace) -> Path:

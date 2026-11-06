@@ -18,8 +18,8 @@ from pathlib import Path
 
 import yaml
 
-from videocore import UsageError
-from videocore.options import option, options_of, parse_mapping, validate
+from videocore import RunOptions, UsageError
+from videocore.options import options_of, parse_mapping
 from videosemanticreducer.pipeline import ProcessOptions
 
 APP_NAME = "videosemanticreducer"
@@ -28,38 +28,11 @@ SECTION = "process"
 
 
 @dataclass(frozen=True)
-class RunDefaults:
-    """How to run `process`; unlike `ProcessOptions`, these do not change the archive."""
-
-    output: Path | None = option(
-        None,
-        "output folder; with -r, subfolders are recreated inside it "
-        "(in the config file, relative to the file)",
-        flags=("-o", "--output"),
-        default_text="a <name>_summary folder next to each video",
-    )
-    workers: int | None = option(
-        None,
-        "videos processed in parallel for folders",
-        flags=("-w", "--workers"),
-        gt=0,
-        default_text="automatic",
-        advanced=True,
-    )
-    recursive: bool = option(
-        False, "include subfolders when processing a folder", flags=("-r", "--recursive")
-    )
-
-    def __post_init__(self) -> None:
-        validate(self)
-
-
-@dataclass(frozen=True)
 class ProcessDefaults:
     """The defaults of `process`: built-in ones, changed by the config file."""
 
     options: ProcessOptions = field(default_factory=ProcessOptions)
-    run: RunDefaults = field(default_factory=RunDefaults)
+    run: RunOptions = field(default_factory=RunOptions)
 
 
 class ConfigError(UsageError):
@@ -107,7 +80,7 @@ def load_config(path: Path | None) -> ProcessDefaults:
     if not isinstance(section, dict):
         raise ConfigError(f"{path}: '{SECTION}' must be a mapping of option: value")
     try:
-        values = parse_mapping([ProcessOptions, RunDefaults], section)
+        values = parse_mapping([ProcessOptions, RunOptions], section)
     except ValueError as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
@@ -125,7 +98,7 @@ def split_values(values: dict, base: ProcessDefaults | None = None) -> ProcessDe
 
     return ProcessDefaults(
         options=dataclasses.replace(base.options, **pick(ProcessOptions)),
-        run=dataclasses.replace(base.run, **pick(RunDefaults)),
+        run=dataclasses.replace(base.run, **pick(RunOptions)),
     )
 
 
@@ -145,6 +118,8 @@ def render_template(defaults: ProcessDefaults | None = None) -> str:
             )
             rendered = rendered.strip().removesuffix("...").strip()
             comment = opt.spec.help
+            if opt.kind is Path:
+                comment += "; relative paths are relative to this file"
             if opt.optional and opt.spec.default_text:
                 comment += f"; null = {opt.spec.default_text}"
             lines.append(f"  {opt.name}: {rendered}  # {comment}")

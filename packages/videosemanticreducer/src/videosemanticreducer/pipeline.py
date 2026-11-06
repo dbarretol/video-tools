@@ -16,11 +16,9 @@ thread while frames are decoded.
 
 from __future__ import annotations
 
-import dataclasses
-import functools
 import logging
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -29,21 +27,18 @@ from pathlib import Path
 from PIL import Image
 
 from videocore import (
-    BatchResult,
     OutputSlot,
+    Status,
     VideoInfo,
     atomic_write,
     compose_grid,
-    default_workers,
     evenly_spaced,
     iter_frames,
-    plan_outputs,
     probe,
     remove_partials,
-    run_parallel,
     sample_frames,
 )
-from videocore.options import option, validate
+from videocore.options import option, options_of, validate
 from videosemanticreducer import fingerprint as fp
 from videosemanticreducer.info_card import render_info_card
 from videosemanticreducer.manifest import (
@@ -104,8 +99,6 @@ class ProcessOptions:
     fingerprint: bool = option(
         True, "create <name>.fingerprint.json", label="Fingerprint", group="artifacts"
     )
-    sampling_workers: int | None = None
-    """Containers decoding in parallel per video; use 1 when processing videos in parallel."""
 
     def __post_init__(self) -> None:
         validate(self)
@@ -160,11 +153,14 @@ def process_video(
     options: ProcessOptions | None = None,
     *,
     name: str | None = None,
+    decoders: int | None = None,
 ) -> ProcessResult:
     """Write the artifacts of `video` into `output_dir`, then its manifest.
 
     Artifacts are named after `name`, the video's stem by default; batches pass
     the full file name for videos whose stems collide (see ``videocore.outputs``).
+    `decoders` limits the containers decoding in parallel; batches pass 1 since
+    videos already run in parallel.
     The manifest (``<name>.archive.json``) is written last, with
     ``complete: true`` only when every requested artifact was written.
     """
@@ -189,7 +185,7 @@ def process_video(
 
     recorded = _recorded_options(options)
     try:
-        sha256 = _write_artifacts(info, output_dir, stem, options, result, timer)
+        sha256 = _write_artifacts(info, output_dir, stem, options, result, timer, decoders)
     except Exception as exc:
         manifest = build_manifest(
             Source.from_info(info), recorded, result.outputs, error=f"{type(exc).__name__}: {exc}"
@@ -215,6 +211,7 @@ def _write_artifacts(
     options: ProcessOptions,
     result: ProcessResult,
     timer: _Timer,
+    decoders: int | None,
 ) -> str | None:
     """Write the requested artifacts into `result.outputs`; return the file's SHA-256."""
     result.outputs.append(write_report(info, output_dir / f"{stem}_info.txt"))
@@ -224,7 +221,7 @@ def _write_artifacts(
         if options.summary or options.thumbnail:
             with timer("snapshots"):
                 summary_path = output_dir / f"{stem}_summary.mp4"
-                thumbs = _snapshots_and_thumbs(info, summary_path, options, result)
+                thumbs = _snapshots_and_thumbs(info, summary_path, options, result, decoders)
             if options.thumbnail:
                 with timer("thumbnail"):
                     result.outputs.append(
@@ -234,9 +231,9 @@ def _write_artifacts(
         if sha_future is None:
             return None
         with timer("global_hashes"):
-            global_hashes = fp.compute_global_hashes(info, workers=options.sampling_workers)
+            global_hashes = fp.compute_global_hashes(info, workers=decoders)
         with timer("keyframe_hashes"):
-            keyframe_hashes = fp.compute_keyframe_hashes(info, workers=options.sampling_workers)
+            keyframe_hashes = fp.compute_keyframe_hashes(info, workers=decoders)
         with timer("sha256_wait"):
             sha256 = sha_future.result()
         fingerprint = fp.build_fingerprint(info, sha256, global_hashes, keyframe_hashes)
@@ -248,70 +245,8 @@ def _write_artifacts(
 
 
 def _recorded_options(options: ProcessOptions) -> dict[str, object]:
-    """The options that shape the artifacts; how many decoders ran does not."""
-    recorded = dataclasses.asdict(options)
-    del recorded["sampling_workers"]
-    return recorded
-
-
-def process_batch(
-    videos: Sequence[Path],
-    output: Path | None,
-    options: ProcessOptions | None = None,
-    *,
-    source: Path | None = None,
-    skip_complete: bool = False,
-    workers: int | None = None,
-    on_progress: Callable[[int, int, BatchResult], None] | None = None,
-    should_cancel: Callable[[], bool] | None = None,
-) -> list[BatchResult]:
-    """Process several videos in parallel processes; one failure does not stop the others.
-
-    Each video gets its own ``<stem>_summary`` folder, next to it or inside `output`.
-    With `source`, the folder that was scanned, its subfolders are recreated inside
-    `output`. Videos whose stems collide in the same place use their full file
-    name instead (``clip.mp4_summary``). Successful results carry the folder as
-    their value. Raises ``videocore.OutputCollisionError`` before processing
-    anything if two videos would still write the same folder.
-
-    With `skip_complete`, videos already archived (see `archive_state`) are not
-    processed again; they are returned with ``skipped=True`` and the state as
-    their ``detail``. Progress is reported for the processed videos only.
-    """
-    slots = plan_outputs(videos, output=output, source=source)
-    states = [
-        archive_state(_slot_dir(slot), slot.name, options) if skip_complete else None
-        for slot in slots
-    ]
-    skipped = [
-        BatchResult(item=video, ok=True, value=_slot_dir(slot), skipped=True, detail=state)
-        for video, slot, state in zip(videos, slots, states, strict=True)
-        if state is not None
-    ]
-    if skipped:
-        logger.info("Skipping %d videos that are already archived", len(skipped))
-    todo = [i for i, state in enumerate(states) if state is None]
-    options = options or ProcessOptions()
-    workers = workers or default_workers()
-    if workers > 1:
-        # Videos already run in parallel; one decoder per video avoids oversubscription.
-        options = dataclasses.replace(options, sampling_workers=1)
-    task = functools.partial(_process_in_batch, options=options)
-    try:
-        processed = run_parallel(
-            task,
-            [videos[i] for i in todo],
-            item_args=[slots[i] for i in todo],
-            workers=workers,
-            on_progress=on_progress,
-            should_cancel=should_cancel,
-        )
-    finally:
-        # Workers killed on cancel or Ctrl+C leave their unfinished files behind.
-        for i in todo:
-            remove_partials(_slot_dir(slots[i]))
-    order = {video: index for index, video in enumerate(videos)}
-    return sorted([*skipped, *processed], key=lambda result: order[result.item])
+    """The options that shape the artifacts, by name."""
+    return {opt.name: getattr(options, opt.name) for opt in options_of(ProcessOptions)}
 
 
 ARCHIVE_COMPLETE = "complete"
@@ -345,15 +280,49 @@ def _slot_dir(slot: OutputSlot) -> Path:
     return slot.folder / f"{slot.name}{OUTPUT_DIR_SUFFIX}"
 
 
-def _process_in_batch(video: Path, slot: OutputSlot, *, options: ProcessOptions) -> Path:
-    # Module-level so it can be pickled into worker processes.
-    out_dir = _slot_dir(slot)
-    process_video(video, out_dir, options, name=slot.name)
-    return out_dir
+# Rough single-worker cost of an archive with the default options: a fixed part
+# for the summary, grid and hashes plus reading the whole file for the SHA-256.
+ARCHIVE_FIXED_SECONDS = 8.0
+ARCHIVE_SECONDS_PER_VIDEO_SECOND = 0.004
+
+
+@dataclass(frozen=True)
+class ArchiveTask:
+    """``videocore.jobs.Task`` that archives each video into its ``<name>_summary`` folder."""
+
+    name: str = "archive"
+
+    def output(self, slot: OutputSlot) -> Path:
+        return _slot_dir(slot)
+
+    def state(self, output: Path, name: str, options: ProcessOptions) -> Status | None:
+        state = archive_state(output, name, options)
+        if state == ARCHIVE_COMPLETE:
+            return Status.SKIPPED
+        return Status.OUTDATED if state == ARCHIVE_OUTDATED else None
+
+    def run(
+        self, video: Path, output: Path, name: str, options: ProcessOptions, decoders: int | None
+    ) -> ProcessResult:
+        return process_video(video, output, options, name=name, decoders=decoders)
+
+    def cleanup(self, output: Path) -> None:
+        remove_partials(output)
+
+    def estimate(self, duration: float, options: ProcessOptions) -> float | None:
+        scale = options.num_snapshots / 150 if options.summary else 0.3
+        return ARCHIVE_FIXED_SECONDS * scale + duration * ARCHIVE_SECONDS_PER_VIDEO_SECOND
+
+
+ARCHIVE = ArchiveTask()
 
 
 def _snapshots_and_thumbs(
-    info: VideoInfo, summary_path: Path, options: ProcessOptions, result: ProcessResult
+    info: VideoInfo,
+    summary_path: Path,
+    options: ProcessOptions,
+    result: ProcessResult,
+    decoders: int | None,
 ) -> list[Image.Image | None]:
     """Decode the snapshots once: encode the summary and keep small copies for the grid.
 
@@ -364,9 +333,7 @@ def _snapshots_and_thumbs(
     thumb_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     if not options.summary:
         timestamps = snapshot_timestamps(info.duration, cells)
-        return sample_frames(
-            info.path, timestamps, size=thumb_size, workers=options.sampling_workers
-        )
+        return sample_frames(info.path, timestamps, size=thumb_size, workers=decoders)
 
     snap_size = even_size(info.video.width, info.video.height, SNAPSHOT_MAX_SIDE)
     timestamps = snapshot_timestamps(info.duration, options.num_snapshots)
@@ -381,9 +348,7 @@ def _snapshots_and_thumbs(
         writer.add(render_info_card(info, snap_size), duration=INFO_CARD_DURATION)
         # Frames arrive in order while the next ones are decoded, so encoding overlaps
         # decoding and only a few full-size frames are in memory at a time.
-        frames = iter_frames(
-            info.path, timestamps, size=snap_size, workers=options.sampling_workers
-        )
+        frames = iter_frames(info.path, timestamps, size=snap_size, workers=decoders)
         for index, image in frames:
             if image is None:
                 continue
@@ -403,7 +368,7 @@ def _snapshots_and_thumbs(
             info.path,
             snapshot_timestamps(info.duration, cells),
             size=thumb_size,
-            workers=options.sampling_workers,
+            workers=decoders,
         )
     return thumbs
 
