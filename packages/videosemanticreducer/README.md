@@ -60,10 +60,17 @@ The defaults of `process` can be changed in a YAML file instead of passing the s
 time. Flags given on the command line still take precedence.
 
 ```bash
+videosemanticreducer config set num_snapshots 100   # change one default
+videosemanticreducer config unset num_snapshots     # back to the built-in default
+videosemanticreducer config edit   # open the file in an editor (created first if needed)
 videosemanticreducer config init   # write a commented config file with every option
 videosemanticreducer config path   # where it is
 videosemanticreducer config show   # the defaults in effect and where they come from
 ```
+
+`config set` checks the value before writing it and changes only that line, keeping your comments.
+A relative path given to `config set output` is taken from the current folder. The editor is
+`$VISUAL` or `$EDITOR` when set, otherwise the system's editor for text files.
 
 ```yaml
 process:
@@ -78,6 +85,9 @@ The file is `%APPDATA%\videosemanticreducer\config.yaml` on Windows and
 `--config FILE` or the `VIDEOSEMANTICREDUCER_CONFIG` environment variable. Unknown options,
 values of the wrong type and values out of range (such as `num_snapshots: 0`) are reported as errors
 that name the file, and nothing is processed.
+
+The time estimate printed before a batch learns from earlier runs how fast archiving is on this
+computer. That measure is kept in `state.json`, next to the logs, and can be deleted at any time.
 
 ## Artifacts
 

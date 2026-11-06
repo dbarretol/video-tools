@@ -1,7 +1,8 @@
 # videocore
 
 Shared library used by `videothumb` and `videosemanticreducer`: video probing, frame sampling,
-grid composition, parallel batch processing, output planning and atomic writes. Not intended to be
+grid composition, parallel batch processing, output planning, atomic writes, config files and
+state between runs. Not intended to be
 used on its own.
 
 ## Options
@@ -22,6 +23,21 @@ From that declaration, `add_arguments` builds the command-line flags (type, limi
 the help, `--flag/--no-flag` for booleans), `given_values` reads the flags given, `parse_mapping`
 checks config-file values and `options_of` lists the options for templates and forms. Fields made
 with `dataclasses.field` are internal and are not exposed.
+
+## Config files
+
+`videocore.config.AppConfig` describes the YAML file of defaults of one tool: its sections, each
+with the options of one or more option classes. It finds the file (`--config`, then
+`$<APP>_CONFIG`, then `%APPDATA%\<app>\config.yaml`), reads and checks it, renders a commented
+template and changes single values in place, keeping comments. `add_config_commands` adds the
+`init`, `show`, `path`, `edit`, `set` and `unset` actions to a command-line parser.
+
+## State
+
+`videocore.State` is what a tool remembers between runs, in `%LOCALAPPDATA%\<app>\state.json`.
+It is not meant to be edited; a missing or damaged file reads as empty. Today it keeps how much
+longer than its estimate each task takes on this computer: pass `speed=state.speed(task.name)` to
+`plan` and call `state.learn_speed(task.name, report.measured_speed())` after `execute`.
 
 ## Jobs
 
