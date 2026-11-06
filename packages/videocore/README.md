@@ -41,3 +41,15 @@ report.items  # one ItemResult per video, in order: OK, FAILED, SKIPPED, OUTDATE
 `plan` writes nothing, so it also serves `--dry-run`. `RunOptions` holds how to run (output root,
 recursion, workers, overwrite); each task keeps its own options for what to produce. When several
 videos run in parallel, `execute` gives each one a single decoder.
+
+## Progress and cancellation
+
+Inside a task, `videocore.progress.stage("snapshots", done, total)` reports where a video is and
+`progress.check_cancelled()` stops it with `Cancelled` when the run was asked to stop. Both do
+nothing outside a run. `sample_frames`/`iter_frames` take `stage=` to report every decoded frame,
+and they check for cancellation at every frame.
+
+`execute(..., on_event=...)` receives those events (`ProgressEvent`: item, stage, done, total) from
+every video, including those running in worker processes. `should_cancel` can be a `CancelToken`.
+On cancel or Ctrl+C, running videos stop at their next frame and clean up their unfinished files;
+a process that does not stop within a few seconds is killed.

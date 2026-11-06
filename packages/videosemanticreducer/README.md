@@ -36,6 +36,8 @@ Before processing a folder, `process` reports its plan: how many videos will be 
 many are already done or were done with other settings, the length of video to process, a rough
 time estimate and files that are only in OneDrive (reading them downloads them). `--dry-run`
 prints that plan with one line per video and stops without writing anything.
+When a single video is archived, each step is logged as it starts (summary video, thumbnail
+grid, fingerprint...); with `-v`, batches log them too.
 
 `verify` and `compare` exit with 0 when the videos match, 1 when they do not (or the match is
 uncertain) and 2 when a file cannot be read.
