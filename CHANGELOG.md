@@ -44,6 +44,7 @@ command.
   `--thumb-cols`/`--thumb-rows`. Archives made before are still read by `status` and are not
   redone; archiving one again replaces its `_thumb.jpg`.
 - Config file: the section `process:` is now `archive:`, and `thumbnail`, `thumb_cols` and
-  `thumb_rows` are now `sheet`, `sheet_columns` and `sheet_rows`.
+  `thumb_rows` are now `sheet`, `sheet_columns` and `sheet_rows`. A file with the old names is
+  rejected with the new name of each one.
 - `status PATH...` checks archives before originals are deleted.
 - `fingerprint` takes several videos.
