@@ -108,9 +108,29 @@ def test_default_size_is_native_resolution(video_only, spec):
     assert frame.size == (spec.width, spec.height)
 
 
-def test_timestamp_past_the_end_still_returns_a_frame(video_only):
-    (frame,) = sample_frames(video_only, [60.0], mode="precise")
-    assert frame is not None
+def test_timestamp_just_past_the_end_returns_the_last_frame(video_only, frame_index, spec):
+    # The clip lasts 2 s and its last frame starts at 1.9 s.
+    (frame,) = sample_frames(video_only, [2.5], mode="precise")
+    assert frame_index(frame) == spec.frames - 1
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_timestamp_far_past_the_end_is_a_gap(video_only, fallback):
+    mode = "keyframe" if fallback else "precise"
+    frames = sample_frames(video_only, [1.0, 30.0, 60.0], mode=mode, fallback=fallback)
+    assert frames[0] is not None
+    assert frames[1:] == [None, None]
+
+
+def test_a_cut_file_gives_gaps_not_repeated_frames(video_only, tmp_path):
+    # Half downloaded: the header still says 2 s, but the data ends earlier.
+    cut = tmp_path / "cut.mkv"
+    data = video_only.read_bytes()
+    cut.write_bytes(data[: len(data) // 2])
+    frames = sample_frames(cut, evenly_spaced(0.0, 2.0, 10, endpoints=False), fallback=True)
+    times = [f.info["time"] for f in frames if f is not None]
+    assert None in frames
+    assert len(times) == len(set(times))  # no position shows the frame of another
 
 
 def test_unknown_mode(video_only):
@@ -137,3 +157,36 @@ def test_evenly_spaced_without_endpoints():
 def test_evenly_spaced_rejects_non_positive_count():
     with pytest.raises(ValueError):
         evenly_spaced(0.0, 1.0, 0)
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_fallback_resamples_repeated_keyframes(video_only, frame_index, workers):
+    # Keyframes every 0.5 s: 0.1 and 0.2 both land on frame 0, 0.6 on frame 5.
+    timestamps = [0.6, 0.1, 0.2]
+    plain = sample_frames(video_only, timestamps, workers=workers)
+    assert [frame_index(f) for f in plain] == [5, 0, 0]
+
+    frames = sample_frames(video_only, timestamps, workers=workers, fallback=True)
+    assert [frame_index(f) for f in frames] == [5, 0, 2]
+    assert [bool(f.info.get("resampled")) for f in frames] == [False, False, True]
+    assert frames[2].info["time"] == pytest.approx(0.2)
+
+
+def test_fallback_resamples_missing_frames(video_only, frame_index, monkeypatch):
+    from videocore import frames as frames_module
+
+    real = frames_module._Seeker.frame
+
+    def lose_keyframes(self, index):
+        return None if self.job.mode == "keyframe" and index == 1 else real(self, index)
+
+    monkeypatch.setattr(frames_module._Seeker, "frame", lose_keyframes)
+    frames = sample_frames(video_only, [0.0, 0.7], fallback=True, workers=1)
+    assert [frame_index(f) for f in frames] == [0, 7]
+    assert sample_frames(video_only, [0.0, 0.7], workers=1)[1] is None
+
+
+def test_fallback_does_not_change_precise_mode(video_only, frame_index):
+    frames = sample_frames(video_only, [0.1, 0.2], mode="precise", fallback=True)
+    assert [frame_index(f) for f in frames] == [1, 2]
+    assert not any(f.info.get("resampled") for f in frames)

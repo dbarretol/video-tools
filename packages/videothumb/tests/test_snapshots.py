@@ -1,12 +1,22 @@
+import re
+
 import pytest
 from PIL import Image
 
-from videothumb.snapshots import SnapshotOptions, default_snapshot_dir, make_snapshots
+from videothumb.snapshots import (
+    SnapshotOptions,
+    default_snapshot_dir,
+    frame_name,
+    make_snapshots,
+)
+
+NAME = re.compile(r"clip_f(\d{3})_00h00m0\ds\.jpg")
 
 
-def test_snapshots_are_numbered_full_resolution_jpegs(clip, tmp_path):
-    paths = make_snapshots(clip, tmp_path / "snaps", SnapshotOptions(count=5))
-    assert [p.name for p in paths] == [f"snapshot_{i:03d}.jpg" for i in range(1, 6)]
+def test_frames_are_named_after_the_video_and_moment(clip, tmp_path):
+    paths = make_snapshots(clip, tmp_path / "frames", SnapshotOptions(count=5))
+    numbers = [int(NAME.fullmatch(p.name).group(1)) for p in paths]
+    assert numbers == [1, 2, 3, 4, 5]
     with Image.open(paths[0]) as image:
         assert image.size == (160, 90)
         assert image.format == "JPEG"
@@ -24,7 +34,31 @@ def test_precise_snapshots_follow_the_video(clip, tmp_path, gray_index):
 
 def test_padding_grows_with_count(clip, tmp_path):
     paths = make_snapshots(clip, tmp_path, SnapshotOptions(count=1000, jpeg_quality=10))
-    assert paths[0].name == "snapshot_0001.jpg"
+    assert paths[0].name.startswith("clip_f0001_")
+    named = make_snapshots(clip, tmp_path / "n", SnapshotOptions(count=1), name="clip.mp4")
+    assert named[0].name.startswith("clip.mp4_f001_")
+
+
+def test_frame_names():
+    assert frame_name("clip", 1, 754.9) == "clip_f001_00h12m34s.jpg"
+    assert frame_name("clip", 12, 3 * 3600 + 5, pad=4) == "clip_f0012_03h00m05s.jpg"
+
+
+def test_missing_snapshots_are_logged(clip, tmp_path, monkeypatch, caplog):
+    from videothumb import snapshots
+
+    real = snapshots.iter_frames
+
+    def lose_second_frame(*args, **kwargs):
+        for index, image in real(*args, **kwargs):
+            yield index, None if index == 1 else image
+
+    monkeypatch.setattr(snapshots, "iter_frames", lose_second_frame)
+
+    paths = make_snapshots(clip, tmp_path, SnapshotOptions(count=4))
+
+    assert [p.name.split("_")[1] for p in paths] == ["f001", "f003", "f004"]
+    assert "Saved 3/4 frames" in caplog.text
 
 
 def test_video_without_video_stream(audio_only, tmp_path):
@@ -33,7 +67,7 @@ def test_video_without_video_stream(audio_only, tmp_path):
 
 
 def test_default_snapshot_dir(tmp_path):
-    assert default_snapshot_dir(tmp_path / "movie.mp4") == tmp_path / "movie"
+    assert default_snapshot_dir(tmp_path / "movie.mp4") == tmp_path / "movie_frames"
 
 
 @pytest.mark.parametrize("kwargs", [{"count": 0}, {"jpeg_quality": 101}])

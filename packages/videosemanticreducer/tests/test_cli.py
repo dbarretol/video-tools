@@ -1,20 +1,39 @@
+import dataclasses
+import json
 import shutil
 
 import pytest
 
-from videosemanticreducer.cli import main
+from videosemanticreducer.cli import main, parse_grid
 
-FAST = ["-n", "6", "--thumb-cols", "3", "--thumb-rows", "2"]
+FAST = ["-n", "6", "--grid", "3x2"]
 
 
 def test_without_arguments_prints_help(capsys):
     assert main([]) == 0
-    assert "process" in capsys.readouterr().out
+    assert "archive" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("argv", "start"),
+    [
+        (["help"], "usage: videosemanticreducer [-h]"),
+        (["/?"], "usage: videosemanticreducer [-h]"),
+        (["-v", "help", "status"], "usage: videosemanticreducer status"),
+        (["help", "process"], "usage: videosemanticreducer archive"),
+        (["verify", "-?"], "usage: videosemanticreducer verify"),
+    ],
+)
+def test_help_in_other_words(argv, start, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.startswith(start)
 
 
 def test_process_single_video(clip, tmp_path):
     out = tmp_path / "out"
-    assert main(["process", str(clip), "-o", str(out), *FAST]) == 0
+    assert main(["archive", str(clip), "-o", str(out), *FAST]) == 0
     assert (out / "clip_summary.mp4").is_file()
     assert (out / "clip.fingerprint.json").is_file()
 
@@ -28,9 +47,9 @@ def test_process_folder(clip, tmp_path, workers):
     (folder / "notes.txt").write_text("not a video")
     out = tmp_path / "out"
 
-    args = ["process", str(folder), "-o", str(out), "-w", workers, "--no-video", *FAST]
+    args = ["archive", str(folder), "-o", str(out), "-w", workers, "--no-summary", *FAST]
     assert main(args) == 0
-    assert (out / "a_summary" / "a_thumb.jpg").is_file()
+    assert (out / "a_summary" / "a_sheet.jpg").is_file()
     assert (out / "b_summary" / "b.fingerprint.json").is_file()
 
 
@@ -39,13 +58,132 @@ def test_process_folder_reports_failures(clip, tmp_path):
     folder.mkdir()
     shutil.copy(clip, folder / "good.mp4")
     (folder / "broken.mp4").write_bytes(b"not a video")
-    args = ["process", str(folder), "-o", str(tmp_path / "out"), "-w", "1", "--no-video", *FAST]
+    args = ["archive", str(folder), "-o", str(tmp_path / "out"), "-w", "1", "--no-summary", *FAST]
     assert main(args) == 1
     assert (tmp_path / "out" / "good_summary" / "good_info.txt").is_file()
 
 
-def test_process_missing_input(tmp_path):
-    assert main(["process", str(tmp_path / "missing.mp4")]) == 1
+def test_recursive_process_skips_its_own_outputs(clip, tmp_path):
+    folder = tmp_path / "videos"
+    (folder / "sub").mkdir(parents=True)
+    shutil.copy(clip, folder / "a.mp4")
+    shutil.copy(clip, folder / "sub" / "b.mp4")
+    args = ["archive", str(folder), "-r", "-w", "1", "--no-fingerprint", *FAST]
+
+    assert main(args) == 0
+    assert (folder / "a_summary" / "a_summary.mp4").is_file()
+    # A second pass finds the same two videos, not the summary videos it wrote.
+    assert main(args) == 0
+    assert not (folder / "a_summary" / "a_summary_summary").exists()
+    assert not (folder / "sub" / "b_summary" / "b_summary_summary").exists()
+
+
+def test_process_audio_only_fails(audio_only, tmp_path):
+    assert main(["archive", str(audio_only), "-o", str(tmp_path / "out")]) == 1
+
+
+def test_process_missing_input_is_a_usage_error(tmp_path):
+    assert main(["archive", str(tmp_path / "missing.mp4")]) == 2
+
+
+def spy_logging(monkeypatch, tmp_path):
+    calls = []
+
+    def setup(app, console, *, verbose):
+        calls.append((verbose, console.quiet))
+        return tmp_path / "x.log"
+
+    monkeypatch.setattr("videosemanticreducer.cli.setup_logging", setup)
+    return calls
+
+
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_verbose_and_quiet_work_before_or_after_the_subcommand(tmp_path, position, monkeypatch):
+    calls = spy_logging(monkeypatch, tmp_path)
+    missing = str(tmp_path / "missing.mp4")
+    argv = ["-v", "archive", missing] if position == "before" else ["archive", missing, "-v"]
+    main(argv)
+    flags = ["-q", "status", missing] if position == "before" else ["status", missing, "-q"]
+    main(flags)
+    assert calls == [(True, False), (False, True)]
+
+
+def test_logs_go_to_the_console_only_with_verbose(tmp_path, monkeypatch, capsys):
+    calls = spy_logging(monkeypatch, tmp_path)
+    main(["archive", str(tmp_path / "missing.mp4")])
+    assert calls == [(False, False)]
+    assert capsys.readouterr().err.startswith("Error: Not found")
+
+
+def test_debug_messages_print_with_verbose(clip, tmp_path, capsys):
+    assert main(["archive", str(clip), "-o", str(tmp_path / "out"), "-v", *FAST]) == 0
+    assert "summary video" in capsys.readouterr().err  # the stages of the video
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [("-n", "0"), ("-d", "-1"), ("--grid", "x"), ("--grid", "3x0"), ("-w", "0")],
+)
+def test_invalid_option_values_are_rejected(clip, capsys, option, value):
+    with pytest.raises(SystemExit) as exc:
+        main(["archive", str(clip), option, value])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "must be greater than 0" in err or "expected" in err
+
+
+def test_complete_archives_are_skipped_unless_overwrite(clip, tmp_path, capsys):
+    out = tmp_path / "out"
+    args = ["archive", str(clip), "-o", str(out), "--no-fingerprint", *FAST]
+    assert main(args) == 0
+    first = (out / "clip_sheet.jpg").stat().st_mtime_ns
+    assert f"Archived {clip} in {out}" in capsys.readouterr().out
+
+    assert main(args) == 0
+    assert "already archived" in capsys.readouterr().out
+    assert (out / "clip_sheet.jpg").stat().st_mtime_ns == first
+
+    assert main([*args, "--overwrite"]) == 0
+    assert (out / "clip_sheet.jpg").stat().st_mtime_ns != first
+
+
+def test_newly_requested_artifacts_are_not_skipped(clip, tmp_path):
+    out = tmp_path / "out"
+    base = ["archive", str(clip), "-o", str(out), *FAST]
+    assert main([*base, "--no-fingerprint"]) == 0
+    assert main(base) == 0  # the fingerprint was not made the first time
+    assert (out / "clip.fingerprint.json").is_file()
+
+
+def test_archives_made_with_other_settings_are_reported_not_redone(clip, tmp_path, capsys):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    shutil.copy(clip, folder / "a.mp4")
+    base = ["archive", str(folder), "-w", "1", "--no-fingerprint", "--no-summary"]
+    assert main([*base, "--grid", "2x2"]) == 0
+
+    capsys.readouterr()
+    assert main([*base, "--grid", "3x2"]) == 0
+    out = capsys.readouterr().out
+    assert "1 archived with other settings (not redone)" in out
+    assert "--overwrite" in out
+
+
+def test_incomplete_archive_is_redone(clip, tmp_path):
+    out = tmp_path / "out"
+    args = ["archive", str(clip), "-o", str(out), "--no-fingerprint", *FAST]
+    assert main(args) == 0
+    (out / "clip_sheet.jpg").unlink()  # the manifest no longer matches the folder
+    assert main(args) == 0
+    assert (out / "clip_sheet.jpg").is_file()
+
+
+def test_ctrl_c_exits_with_130(clip, tmp_path, monkeypatch):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("videosemanticreducer.pipeline.process_video", interrupted)
+    assert main(["archive", str(clip), "-o", str(tmp_path / "out")]) == 130
 
 
 def test_fingerprint_compare_and_verify(clip, tmp_path, capsys):
@@ -66,7 +204,246 @@ def test_fingerprint_compare_and_verify(clip, tmp_path, capsys):
     assert "matches the original" in capsys.readouterr().out
 
 
+def test_verify_and_compare_exit_1_when_the_video_differs(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import cli
+
+    saved = tmp_path / "clip.fingerprint.json"
+    assert main(["fingerprint", str(clip), "-o", str(saved)]) == 0
+    real = cli.compare_fingerprints
+
+    def as_if_different(fp1, fp2):
+        return dataclasses.replace(real(fp1, fp2), match_level="LOW")
+
+    monkeypatch.setattr(cli, "compare_fingerprints", as_if_different)
+    assert main(["verify", str(clip), str(saved)]) == 1
+    assert main(["compare", str(saved), str(saved)]) == 1
+
+
+def test_verify_errors_exit_2(clip, tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}", encoding="utf-8")
+    assert main(["verify", str(clip), str(bad)]) == 2
+    assert main(["verify", str(tmp_path / "missing.mp4"), str(bad)]) == 2
+
+
 def test_compare_invalid_fingerprint(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{}", encoding="utf-8")
-    assert main(["compare", str(bad), str(bad)]) == 1
+    assert main(["compare", str(bad), str(bad)]) == 2
+
+
+def test_dry_run_writes_nothing(clip, tmp_path, capsys):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    for name in ("a.mp4", "b.mp4"):
+        shutil.copy(clip, folder / name)
+    args = ["archive", str(folder), "-w", "1", "--no-summary", *FAST]
+    assert main([*args, "--no-fingerprint"]) == 0  # a is archived without the fingerprint...
+    shutil.rmtree(folder / "b_summary")
+    capsys.readouterr()
+
+    assert main([*args, "--no-fingerprint", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "2 videos: 1 to process, 1 already done" in out
+    assert "[process] b.mp4 -> b_summary" in out
+    assert not (folder / "b_summary").exists()
+
+    # ...so asking for it now makes a pending again.
+    assert main([*args, "--dry-run"]) == 0
+    assert "2 videos: 2 to process" in capsys.readouterr().out
+
+
+def test_dry_run_of_one_video(clip, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["archive", str(clip), "-o", str(out), "--dry-run"]) == 0
+    text = capsys.readouterr().out
+    assert "1 video: 1 to process" in text and "estimated time" in text
+    assert not out.exists()
+
+
+def test_batch_prints_the_plan_first(clip, tmp_path, capsys):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    shutil.copy(clip, folder / "a.mp4")
+    assert main(["archive", str(folder), "-w", "1", "--no-summary", *FAST]) == 0
+    out = capsys.readouterr().out
+    assert out.index("1 video: 1 to process") < out.index("[1/1] a.mp4: OK")
+    assert "Done: 1 archived, 0 failed." in out
+
+
+def test_failures_come_with_a_hint_and_the_log_path(audio_only, clip, tmp_path, capsys):
+    assert main(["archive", str(audio_only), "-o", str(tmp_path / "out")]) == 1
+    err = capsys.readouterr().err
+    assert "Hint: it has no video to take frames from" in err
+    assert "Details: " in err and "videosemanticreducer" in err
+
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    shutil.copy(clip, folder / "good.mp4")
+    (folder / "broken.mp4").write_bytes(b"not a video")
+    assert main(["archive", str(folder), "-w", "1", "--no-summary", *FAST]) == 1
+    assert "    Hint: the file may be damaged" in capsys.readouterr().err
+
+
+def test_interrupted_batch_says_how_to_resume(clip, tmp_path, monkeypatch, capsys):
+    from videocore import default_runs_dir
+    from videosemanticreducer import pipeline
+
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    for name in ("a.mp4", "b.mp4"):
+        shutil.copy(clip, folder / name)
+    real = pipeline.process_video
+
+    def stop_at_b(video, *args, **kwargs):
+        if video.name == "b.mp4":
+            raise KeyboardInterrupt
+        return real(video, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "process_video", stop_at_b)
+    assert main(["archive", str(folder), "-w", "1", "--no-summary", *FAST]) == 130
+    captured = capsys.readouterr()
+    assert "Done: 1 archived, 0 failed, 1 not finished." in captured.out
+    assert "to resume, run the same command again" in captured.out
+    assert "Interrupted" in captured.err
+    (pending,) = default_runs_dir("videosemanticreducer").glob("*_archive_pending.txt")
+    assert str((folder / "b.mp4").resolve()) in pending.read_text(encoding="utf-8-sig")
+
+
+def test_process_and_status_json(clip, tmp_path, capsys):
+    import json
+
+    video = tmp_path / "vídeo.mp4"  # non-ASCII names are escaped, whatever the console encoding
+    shutil.copy(clip, video)
+    assert main(["archive", str(video), "--json", *FAST]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii()
+    document = json.loads(out)
+    assert document["command"] == "archive" and document["exit_code"] == 0
+    (item,) = document["report"]["items"]
+    assert item["status"] == "ok" and item["video"] == str(video)
+
+    assert main(["status", str(tmp_path), "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    (archive,) = document["archives"]
+    assert archive["status"] == "ready" and archive["video"] == str(video)
+
+    (tmp_path / "other.mp4").write_bytes(b"x")
+    assert main(["status", str(tmp_path), "--json"]) == 1
+    statuses = [a["status"] for a in json.loads(capsys.readouterr().out)["archives"]]
+    assert statuses == ["not_archived", "ready"]
+
+
+def test_process_open_and_help_pause(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import cli
+
+    opened, paused = [], []
+    monkeypatch.setattr("videoconsole.desktop.open_folder", opened.append)
+    monkeypatch.setattr(cli, "pause_if_alone", lambda: paused.append(True))
+    out = tmp_path / "out"
+    assert main(["archive", str(clip), "-o", str(out), "--open", *FAST]) == 0
+    assert opened == [out]
+    assert main([]) == 0  # double-clicked: the help stays on screen
+    assert paused == [True]
+
+
+@pytest.fixture
+def library(clip, tmp_path):
+    for name in ("A/a.mp4", "B/b.mp4", "B/clip [1080p].mp4"):
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        shutil.copy(clip, tmp_path / name)
+    return tmp_path
+
+
+def test_process_many_paths_patterns_and_lists(library, capsys):
+    from videocore import default_runs_dir
+
+    listing = library / "list.txt"
+    listing.write_text('# to archive\n"A/a.mp4"\nB\\clip [1080p].mp4\ngone.mp4\n', encoding="utf-8")
+    out = library / "out"
+    args = ["archive", str(library / "B" / "b*.mp4"), "--input-list", str(listing), "-o", str(out)]
+    assert main([*args, "-w", "1", "--no-summary", "--no-fingerprint", *FAST]) == 1
+    captured = capsys.readouterr()
+    assert "4 videos: 3 to process, 1 not found" in captured.out
+    assert "Done: 3 archived, 1 failed." in captured.out
+    assert "gone.mp4: not found" in captured.err
+    for name in ("a", "b", "clip [1080p]"):
+        assert (out / f"{name}_summary" / f"{name}_info.txt").is_file()
+    (failed,) = default_runs_dir("videosemanticreducer").glob("*_failed.txt")
+    assert str((library / "gone.mp4").resolve()) in failed.read_text(encoding="utf-8-sig")
+
+
+def test_process_needs_an_input(capsys):
+    assert main(["archive"]) == 2
+    assert "Give at least one PATH or --input-list FILE" in capsys.readouterr().err
+
+
+def test_fingerprint_many_videos(library, capsys):
+    assert main(["fingerprint", str(library / "B")]) == 0
+    assert (library / "B" / "b.mp4.fingerprint.json").is_file()
+    assert (library / "B" / "clip [1080p].mp4.fingerprint.json").is_file()
+    assert main(["fingerprint", str(library / "B"), "-o", str(library / "x.json")]) == 2
+    assert "give a single video" in capsys.readouterr().err
+
+
+def test_status_reads_input_lists(library, capsys):
+    assert main(["archive", str(library / "A" / "a.mp4"), "--no-summary", *FAST]) == 0
+    listing = library / "list.txt"
+    listing.write_text("A/a.mp4\ngone.mp4\n", encoding="utf-8")
+    capsys.readouterr()
+    assert main(["status", "--input-list", str(listing)]) == 1
+    out = capsys.readouterr().out
+    assert "READY         a.mp4" in out
+    assert "NOT ARCHIVED  gone.mp4" in out and "not found" in out
+
+
+def test_old_command_and_flags_still_work_with_a_warning(clip, tmp_path, capsys):
+    out = tmp_path / "out"
+    args = ["-q", "process", str(clip), "-o", str(out), "-n", "6", "--no-video"]
+    args += ["--no-fingerprint", "--thumb-cols", "3", "--thumb-rows", "2"]
+    assert main(args) == 0
+    err = capsys.readouterr().err
+    assert "`videosemanticreducer process` is now `videosemanticreducer archive`" in err
+    assert "--no-video is deprecated and will be removed; use --no-summary" in err
+    assert err.count("use --grid CxR") == 2
+    assert not (out / "clip_summary.mp4").exists()
+    manifest = json.loads((out / "clip.archive.json").read_text(encoding="utf-8"))
+    assert manifest["options"]["sheet_columns"] == 3 and manifest["options"]["sheet_rows"] == 2
+
+    assert main(["archive", str(clip), "-o", str(tmp_path / "o2"), "--no-thumbnail", *FAST]) == 0
+    assert "--no-thumbnail is deprecated" in capsys.readouterr().err
+    assert not (tmp_path / "o2" / "clip_sheet.jpg").exists()
+
+
+@pytest.mark.parametrize("text", ["12", "0x3", "3x", "axb", "3x-1"])
+def test_grid_must_be_columns_x_rows(clip, text, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["archive", str(clip), "--grid", text])
+    assert exc.value.code == 2
+    assert "expected COLUMNSxROWS such as 12x12" in capsys.readouterr().err
+
+
+def test_grid_sets_columns_and_rows():
+    assert parse_grid("12x8") == (12, 8) and parse_grid(" 4 X 3 ") == (4, 3)
+
+
+def test_no_progress_is_accepted(clip, tmp_path):
+    assert main(["archive", str(clip), "-o", str(tmp_path / "out"), "--no-progress", *FAST]) == 0
+
+
+def test_without_a_command_the_default_task_runs(clip, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["-q", str(clip), "-o", str(out), *FAST]) == 0
+    assert (out / "clip.archive.json").is_file()
+
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  default_task: status\n", encoding="utf-8")
+    assert main([str(clip), "-o", str(out), "--config", str(config)]) == 0
+    assert "READY" in capsys.readouterr().out
+
+
+def test_the_default_task_cannot_be_a_command_that_does_not_fit(tmp_path, capsys):
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  default_task: compare\n", encoding="utf-8")
+    assert main(["config", "show", "--config", str(config)]) == 2
+    assert "default_task" in capsys.readouterr().err

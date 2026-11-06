@@ -26,7 +26,15 @@ from typing import Any
 
 import imagehash
 
-from videocore import VideoInfo, compose_grid, evenly_spaced, sample_frames
+from videocore import (
+    NoVideoStreamError,
+    VideoInfo,
+    atomic_write,
+    compose_grid,
+    evenly_spaced,
+    progress,
+    sample_frames,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +50,29 @@ KEYFRAME_SIZE = 256
 KEYFRAME_HASH_SIZE = 8
 
 SHA_CHUNK_SIZE = 8 * 1024 * 1024
+# A fingerprint that hashes fewer positions than this cannot confirm a match later.
+MIN_KEYFRAME_RATIO = 0.5
+
+
+class IncompleteFingerprintError(RuntimeError):
+    """The video could not be hashed well enough to verify a copy against it later."""
+
+    hint = (
+        "too few frames could be decoded to recognize this video later, so it was not "
+        "archived; the file may be damaged (check that it plays)"
+    )
 
 
 def compute_sha256(path: str | os.PathLike[str]) -> str:
     """SHA-256 of the whole file. hashlib releases the GIL, so this can run in a thread."""
     digest = hashlib.sha256()
+    total, done = os.path.getsize(path), 0
     with open(path, "rb") as fh:
         while chunk := fh.read(SHA_CHUNK_SIZE):
+            progress.check_cancelled()
             digest.update(chunk)
+            done += len(chunk)
+            progress.stage("sha256", done, total)
     return digest.hexdigest()
 
 
@@ -60,7 +83,13 @@ def compute_global_hashes(
     timestamps = evenly_spaced(info.duration * 0.01, info.duration * 0.99, frames)
     size = (GLOBAL_FRAME_SIZE, GLOBAL_FRAME_SIZE)
     images = sample_frames(
-        info.path, timestamps, mode="precise", size=size, workers=workers, draft=True
+        info.path,
+        timestamps,
+        mode="precise",
+        size=size,
+        workers=workers,
+        draft=True,
+        stage="global_hashes",
     )
     decoded = sum(img is not None for img in images)
     if decoded == 0:
@@ -91,7 +120,13 @@ def compute_keyframe_hashes(
     timestamps = [info.duration * pct / 100 for pct in positions]
     size = (KEYFRAME_SIZE, KEYFRAME_SIZE)
     images = sample_frames(
-        info.path, timestamps, mode="precise", size=size, workers=workers, draft=True
+        info.path,
+        timestamps,
+        mode="precise",
+        size=size,
+        workers=workers,
+        draft=True,
+        stage="keyframe_hashes",
     )
     hashes = []
     for pct, ts, img in zip(positions, timestamps, images, strict=True):
@@ -126,21 +161,45 @@ def build_fingerprint(
     }
 
 
+def check_complete(fingerprint: dict[str, Any], *, positions: int = len(KEY_POSITIONS)) -> None:
+    """Raise IncompleteFingerprintError unless every layer can back a later verification.
+
+    A fingerprint is the proof that an archived video can be deleted, so a
+    partial one is a failure rather than a warning: it needs the global hashes
+    and at least `MIN_KEYFRAME_RATIO` of the keyframe positions.
+    """
+    name = fingerprint.get("filename")
+    if not fingerprint.get("global_hashes"):
+        raise IncompleteFingerprintError(f"No frame could be hashed for the fingerprint of {name}")
+    hashed = len(fingerprint.get("keyframe_hashes") or [])
+    if hashed < math.ceil(positions * MIN_KEYFRAME_RATIO):
+        raise IncompleteFingerprintError(
+            f"Only {hashed}/{positions} keyframe positions could be hashed for {name}"
+        )
+
+
 def compute_fingerprint(
     info: VideoInfo, *, sha256: str | None = None, workers: int | None = None
 ) -> dict[str, Any]:
-    """Compute all layers. Pass `sha256` when it was already computed elsewhere."""
+    """Compute all layers. Pass `sha256` when it was already computed elsewhere.
+
+    Raises ValueError for files without a video stream and IncompleteFingerprintError
+    when too few frames could be decoded.
+    """
+    if not info.has_video:
+        raise NoVideoStreamError(f"No video stream in {info.path}")
     if sha256 is None:
         sha256 = compute_sha256(info.path)
-    global_hashes, keyframe_hashes = None, []
-    if info.has_video:
-        global_hashes = compute_global_hashes(info, workers=workers)
-        keyframe_hashes = compute_keyframe_hashes(info, workers=workers)
-    return build_fingerprint(info, sha256, global_hashes, keyframe_hashes)
+    global_hashes = compute_global_hashes(info, workers=workers)
+    keyframe_hashes = compute_keyframe_hashes(info, workers=workers)
+    fingerprint = build_fingerprint(info, sha256, global_hashes, keyframe_hashes)
+    check_complete(fingerprint)
+    return fingerprint
 
 
 def save_fingerprint(fingerprint: dict[str, Any], path: Path) -> Path:
-    path.write_text(json.dumps(fingerprint, indent=2, ensure_ascii=False), encoding="utf-8")
+    with atomic_write(path) as part:
+        part.write_text(json.dumps(fingerprint, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
 
 

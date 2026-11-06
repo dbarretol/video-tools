@@ -1,12 +1,15 @@
+import ctypes
 import logging
 import multiprocessing
+import operator
 import os
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
-from videocore import find_videos, run_parallel
+from videocore import batch, find_videos, run_parallel
 
 
 def test_find_videos_filters_and_sorts(tmp_path):
@@ -22,6 +25,54 @@ def test_find_videos_filters_and_sorts(tmp_path):
         "c.webm",
         "d.mov",
     ]
+
+
+def test_find_videos_ignores_hidden_files_and_folders(tmp_path):
+    for name in ["clip.mp4", "._clip.mp4", ".hidden.mkv"]:
+        (tmp_path / name).touch()
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "inner.mp4").touch()
+
+    assert [p.name for p in find_videos(tmp_path, recursive=True)] == ["clip.mp4"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows file attributes")
+def test_find_videos_ignores_windows_hidden_attribute(tmp_path):
+    (tmp_path / "shown.mp4").touch()
+    hidden = tmp_path / "hidden.mp4"
+    hidden.touch()
+    hidden_folder = tmp_path / "Recycled"
+    hidden_folder.mkdir()
+    (hidden_folder / "deleted.mp4").touch()
+    for path in (hidden, hidden_folder):
+        assert ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x2)  # FILE_ATTRIBUTE_HIDDEN
+
+    assert [p.name for p in find_videos(tmp_path, recursive=True)] == ["shown.mp4"]
+
+
+def test_find_videos_skip_dir_prunes_subfolders(tmp_path):
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "keep" / "a.mp4").touch()
+    (tmp_path / "skip").mkdir()
+    (tmp_path / "skip" / "b.mp4").touch()
+    (tmp_path / "skip" / "deeper").mkdir()
+    (tmp_path / "skip" / "deeper" / "c.mp4").touch()
+    (tmp_path / "top.mp4").touch()
+    seen = []
+
+    def skip(path):
+        seen.append(path.name)
+        return path.name == "skip"
+
+    found = find_videos(tmp_path, recursive=True, skip_dir=skip)
+
+    assert [p.name for p in found] == ["a.mp4", "top.mp4"]
+    assert "deeper" not in seen  # never entered the skipped folder
+
+
+def test_find_videos_skip_dir_does_not_hide_top_level_files(tmp_path):
+    (tmp_path / "top.mp4").touch()
+    assert find_videos(tmp_path, skip_dir=lambda path: True) == [tmp_path / "top.mp4"]
 
 
 def test_find_videos_missing_folder(tmp_path):
@@ -46,6 +97,21 @@ def test_run_parallel_isolates_errors_and_keeps_order(tmp_path, workers):
     assert [r.value for r in results] == [3, None, 5]
     assert results[1].error.startswith("FileNotFoundError")
     assert sorted(progress) == [1, 2, 3]
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_run_parallel_passes_item_args(workers):
+    items = [Path("a"), Path("b")]
+
+    results = run_parallel(os.path.join, items, item_args=["x", "y"], workers=workers)
+
+    assert [r.value for r in results] == [os.path.join("a", "x"), os.path.join("b", "y")]
+    assert [r.item for r in results] == items
+
+
+def test_run_parallel_item_args_must_match_items():
+    with pytest.raises(ValueError, match="one value per item"):
+        run_parallel(os.path.join, [Path("a")], item_args=[], workers=1)
 
 
 def test_run_parallel_inline_cancellation():
@@ -78,8 +144,10 @@ def _cancel_after(seconds):
     return lambda: time.monotonic() - start > seconds
 
 
-def test_cancelling_stops_running_workers_promptly():
-    # time.sleep is a picklable builtin: each item keeps a worker busy for 30 s.
+def test_cancelling_stops_running_workers_promptly(monkeypatch):
+    # time.sleep is a picklable builtin that never checks for cancellation, so the
+    # workers are killed once the grace period is over.
+    monkeypatch.setattr(batch, "CANCEL_GRACE_SECONDS", 0.5)
     start = time.monotonic()
     results = run_parallel(time.sleep, [30, 30, 30], workers=2, should_cancel=_cancel_after(1))
     assert results == []
@@ -88,7 +156,9 @@ def test_cancelling_stops_running_workers_promptly():
     assert multiprocessing.active_children() == []
 
 
-def test_interruption_stops_running_workers():
+def test_interruption_stops_running_workers(monkeypatch):
+    monkeypatch.setattr(batch, "CANCEL_GRACE_SECONDS", 0.5)
+
     def interrupt():
         if time.monotonic() - start > 1:
             raise RuntimeError("interrupted")  # stands in for KeyboardInterrupt
@@ -99,3 +169,52 @@ def test_interruption_stops_running_workers():
         run_parallel(time.sleep, [30, 30], workers=2, should_cancel=interrupt)
     assert time.monotonic() - start < 15
     assert multiprocessing.active_children() == []
+
+
+DIE_ONCE = """
+import os
+import time
+
+
+def die_once(item):
+    # The first call for "a" kills its own process, like a worker ended from
+    # the Task Manager or out of memory.
+    marker = item.parent / "died"
+    if item.name == "a" and not marker.exists():
+        marker.touch()
+        os._exit(1)
+    time.sleep(0.5)
+    return item.name
+"""
+
+
+def test_a_dead_worker_does_not_abort_the_batch(tmp_path, monkeypatch):
+    # Spawned workers cannot import this test module (pytest imports it with
+    # importlib), but they get our sys.path, so the task lives in its own module.
+    (tmp_path / "die_once_task.py").write_text(DIE_ONCE, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from die_once_task import die_once
+
+    items = [tmp_path / name for name in ("a", "b", "c", "d")]
+    results = run_parallel(die_once, items, workers=2)
+    # The videos that were running are retried, so a worker killed once costs nothing.
+    assert [(r.item.name, r.ok, r.value) for r in results] == [
+        ("a", True, "a"),
+        ("b", True, "b"),
+        ("c", True, "c"),
+        ("d", True, "d"),
+    ]
+    assert multiprocessing.active_children() == []
+
+
+def test_the_video_that_kills_its_worker_fails_alone():
+    # operator.call(f, x) is f(x): os._exit(3) dies every time, the sleeps finish.
+    results = run_parallel(
+        operator.call, [os._exit, time.sleep, time.sleep], item_args=[3, 0.5, 0.5], workers=2
+    )
+    assert [(r.ok, r.error_type) for r in results] == [
+        (False, "BrokenProcessPool"),
+        (True, None),
+        (True, None),
+    ]
+    assert results[0].hint == batch.WORKER_LOST_HINT

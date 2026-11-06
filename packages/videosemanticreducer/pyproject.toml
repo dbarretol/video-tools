@@ -1,7 +1,7 @@
 [project]
 name = "videosemanticreducer"
-version = "0.1.0"
-description = "Archive videos before deleting them: summary video, thumbnail grid, metadata report and perceptual fingerprint."
+version = "0.2.0"
+description = "Archive videos before deleting them: summary video, contact sheet, metadata report and perceptual fingerprint."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -11,11 +11,13 @@ requires-python = ">=3.12"
 dependencies = [
     "imagehash>=4.3.2",
     "pyyaml>=6.0.3",
+    "videoconsole[notify]",
     "videocore",
 ]
 
 [project.scripts]
 videosemanticreducer = "videosemanticreducer.cli:main"
+vsr = "videosemanticreducer.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
@@ -23,3 +25,4 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 videocore = { workspace = true }
+videoconsole = { workspace = true }

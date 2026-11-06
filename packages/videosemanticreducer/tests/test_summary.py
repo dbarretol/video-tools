@@ -51,7 +51,26 @@ def test_failed_encode_removes_the_partial_file(tmp_path):
     with pytest.raises(RuntimeError), SummaryWriter(path, (64, 48), still_duration=0.4) as writer:
         writer.add(Image.new("RGB", (64, 48)))
         raise RuntimeError("decoding failed")
-    assert not path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_encoding_goes_to_a_part_file_until_closed(tmp_path):
+    path = tmp_path / "summary.mp4"
+    with SummaryWriter(path, (64, 48), still_duration=0.4) as writer:
+        # Enough frames for the encoder to emit packets despite its lookahead.
+        for shade in range(0, 240, 4):
+            writer.add(Image.new("RGB", (64, 48), (shade, shade, shade)))
+        assert not path.exists()
+        assert (tmp_path / "summary.mp4.part").is_file()
+    assert [p.name for p in tmp_path.iterdir()] == ["summary.mp4"]
+
+
+def test_failed_encode_keeps_a_previous_video(tmp_path):
+    path = tmp_path / "summary.mp4"
+    path.write_bytes(b"previous run")
+    with pytest.raises(RuntimeError), SummaryWriter(path, (64, 48), still_duration=0.4):
+        raise RuntimeError("decoding failed")
+    assert path.read_bytes() == b"previous run"
 
 
 def test_still_duration_must_be_positive(tmp_path):

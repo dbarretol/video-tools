@@ -1,6 +1,6 @@
 [project]
 name = "videocore"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared video primitives for video-tools: probing, frame sampling, grids and batch processing."
 readme = "README.md"
 license = "MIT"
@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "av>=19.0.2",
     "pillow>=13.0.0",
+    "pyyaml>=6.0.3",
 ]
 
 [build-system]

@@ -7,7 +7,7 @@ from videosemanticreducer.cli import main
 
 
 def test_version_is_exposed():
-    assert videosemanticreducer.__version__ == "0.1.0"
+    assert videosemanticreducer.__version__ == "0.2.0"
 
 
 def test_depends_on_videocore():
@@ -22,4 +22,4 @@ def test_cli_version_flag(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
     assert exc.value.code == 0
-    assert "videosemanticreducer 0.1.0" in capsys.readouterr().out
+    assert "videosemanticreducer 0.2.0" in capsys.readouterr().out

@@ -7,6 +7,8 @@ from videocore import probe
 from videosemanticreducer.fingerprint import (
     FORMAT_VERSION,
     KEY_POSITIONS,
+    IncompleteFingerprintError,
+    check_complete,
     compute_fingerprint,
     compute_sha256,
     load_fingerprint,
@@ -54,11 +56,40 @@ def test_precomputed_sha256_is_used(clip):
     assert fp["sha256"] == "abc"
 
 
-def test_audio_only_file_has_no_perceptual_layers(audio_only):
-    fp = compute_fingerprint(probe(audio_only))
-    assert fp["global_hashes"] is None
-    assert fp["keyframe_hashes"] == []
-    assert len(fp["sha256"]) == 64
+def test_audio_only_file_cannot_be_fingerprinted(audio_only):
+    with pytest.raises(ValueError, match="No video stream"):
+        compute_fingerprint(probe(audio_only))
+
+
+def test_complete_fingerprint_passes_the_check(clip_fingerprint):
+    check_complete(clip_fingerprint)
+
+
+def test_fingerprint_without_global_hashes_is_incomplete(clip_fingerprint):
+    with pytest.raises(IncompleteFingerprintError, match="No frame could be hashed"):
+        check_complete({**clip_fingerprint, "global_hashes": None})
+
+
+@pytest.mark.parametrize(("kept", "complete"), [(11, True), (10, False), (0, False)])
+def test_fingerprint_needs_half_of_the_keyframe_positions(clip_fingerprint, kept, complete):
+    # 22 positions: 11 is exactly half.
+    assert len(KEY_POSITIONS) == 22
+    partial = {**clip_fingerprint, "keyframe_hashes": clip_fingerprint["keyframe_hashes"][:kept]}
+    if complete:
+        check_complete(partial)
+    else:
+        with pytest.raises(IncompleteFingerprintError, match=f"Only {kept}/22"):
+            check_complete(partial)
+
+
+def test_compute_fingerprint_fails_when_no_frame_decodes(clip, monkeypatch):
+    from videosemanticreducer import fingerprint
+
+    monkeypatch.setattr(
+        fingerprint, "sample_frames", lambda path, timestamps, **kwargs: [None] * len(timestamps)
+    )
+    with pytest.raises(IncompleteFingerprintError):
+        compute_fingerprint(probe(clip), sha256="abc")
 
 
 def test_save_and_load_round_trip(clip_fingerprint, tmp_path):

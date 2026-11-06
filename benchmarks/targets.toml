@@ -23,16 +23,22 @@ driver = "drivers/videothumb_jobs.py"
 args = ["--mode", "sheet", "--precise"]
 
 [[target]]
-name = "videothumb-snapshots"
+name = "videothumb-frames"
 python = "../.venv/Scripts/python.exe"
 driver = "drivers/videothumb_jobs.py"
-args = ["--mode", "snapshots", "--count", "10"]
+args = ["--mode", "frames", "--count", "10"]
 
 [[target]]
-name = "videothumb-snapshots-precise"
+name = "videothumb-frames-precise"
 python = "../.venv/Scripts/python.exe"
 driver = "drivers/videothumb_jobs.py"
-args = ["--mode", "snapshots", "--count", "10", "--precise"]
+args = ["--mode", "frames", "--count", "10", "--precise"]
+
+[[target]]
+name = "videothumb-pack"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "pack"]
 
 [[target]]
 name = "vsr-batch"

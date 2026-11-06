@@ -5,14 +5,27 @@ Each thumbnail is labeled with the time of the frame it shows.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from videocore import VideoInfo, compose_grid, evenly_spaced, format_hms, probe, sample_frames
-from videothumb.common import Sampling
+from videocore import (
+    NoFramesError,
+    NoVideoStreamError,
+    VideoInfo,
+    atomic_write,
+    compose_grid,
+    evenly_spaced,
+    format_hms,
+    probe,
+    sample_frames,
+)
+from videocore.options import option, validate
+from videocore.verify import FrameCount
+from videothumb.common import Sampling, jpeg_quality_option, sampling_option
 
 BACKGROUND = (30, 30, 30)
 TEXT_COLOR = (255, 255, 255)
@@ -20,24 +33,21 @@ TIMESTAMP_COLOR = (255, 255, 0)
 HEADER_HEIGHT = 80
 TITLE_SIZE, DETAILS_SIZE, LABEL_SIZE = 22, 15, 14
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class SheetOptions:
-    columns: int = 5
-    rows: int = 4
-    thumbnail_width: int = 320
-    jpeg_quality: int = 90
-    sampling: Sampling = "keyframe"
-    workers: int | None = None
-    """Containers decoding in parallel; use 1 when processing videos in parallel."""
+    columns: int = option(5, "thumbnails per row", gt=0, group="contact sheet")
+    rows: int = option(4, "rows of thumbnails", gt=0, group="contact sheet")
+    thumbnail_width: int = option(
+        320, "thumbnail width in pixels", ge=16, label="Thumbnail width", group="contact sheet"
+    )
+    jpeg_quality: int = jpeg_quality_option()
+    sampling: Sampling = sampling_option()
 
     def __post_init__(self) -> None:
-        if self.columns <= 0 or self.rows <= 0:
-            raise ValueError("columns and rows must be greater than 0")
-        if self.thumbnail_width < 16:
-            raise ValueError("thumbnail_width must be at least 16")
-        if not 1 <= self.jpeg_quality <= 100:
-            raise ValueError("jpeg_quality must be between 1 and 100")
+        validate(self)
 
     @property
     def count(self) -> int:
@@ -48,27 +58,60 @@ def default_sheet_path(video: Path) -> Path:
     return video.with_name(f"{video.stem}_sheet.jpg")
 
 
-def make_sheet(video: str | Path, output: str | Path, options: SheetOptions | None = None) -> Path:
-    """Build the contact sheet of `video` and save it as a JPEG at `output`."""
+def make_sheet(
+    video: str | Path,
+    output: str | Path,
+    options: SheetOptions | None = None,
+    *,
+    decoders: int | None = None,
+    counts: FrameCount | None = None,
+) -> Path:
+    """Build the contact sheet of `video` and save it as a JPEG at `output`.
+
+    `decoders` limits the containers decoding in parallel (see
+    ``videocore.sample_frames``); batches pass 1 since videos already run in parallel.
+    `counts`, when given, receives how many thumbnails could be decoded.
+    """
     options = options or SheetOptions()
     info = probe(video)
     if info.video is None:
-        raise ValueError(f"No video stream in {info.path}")
+        raise NoVideoStreamError(f"No video stream in {info.path}")
 
     timestamps = evenly_spaced(0, info.duration, options.count, endpoints=False)
-    width = options.thumbnail_width
-    height = max(2, round(width * info.video.height / info.video.width))
+    size = cell_size(info, options.thumbnail_width)
     frames = sample_frames(
-        info.path, timestamps, mode=options.sampling, size=(width, height), workers=options.workers
+        info.path,
+        timestamps,
+        mode=options.sampling,
+        size=size,
+        workers=decoders,
+        stage="frames",
+        fallback=True,
     )
-    if all(frame is None for frame in frames):
-        raise RuntimeError(f"No frame could be decoded from {info.path}")
+    decoded = sum(frame is not None for frame in frames)
+    if counts is not None:
+        counts.decoded, counts.total = decoded, len(frames)
+    if decoded == 0:
+        raise NoFramesError(f"No frame could be decoded from {info.path}")
+    if decoded < len(frames):
+        logger.warning(
+            "Contact sheet of %s has %d/%d thumbnails; the rest are black",
+            info.path,
+            decoded,
+            len(frames),
+        )
 
-    sheet = render_sheet(info, frames, timestamps, options.columns, (width, height))
+    sheet = render_sheet(info, frames, timestamps, options.columns, size)
     output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(output, "JPEG", quality=options.jpeg_quality)
+    with atomic_write(output) as part:
+        sheet.save(part, "JPEG", quality=options.jpeg_quality)
     return output
+
+
+def cell_size(info: VideoInfo, width: int) -> tuple[int, int]:
+    """The size of each thumbnail: `width` wide, with the video's aspect ratio."""
+    assert info.video is not None
+    return width, max(2, round(width * info.video.height / info.video.width))
 
 
 def render_sheet(

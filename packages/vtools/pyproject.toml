@@ -1,0 +1,29 @@
+[project]
+name = "vtools"
+version = "0.2.0"
+description = "One command for videothumb and videosemanticreducer: contact sheets, frames, packs and video archives."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "dbarretol", email = "57958754+dbarretol@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "videoconsole",
+    "videocore",
+    "videosemanticreducer",
+    "videothumb",
+]
+
+[project.scripts]
+vtools = "vtools.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+videoconsole = { workspace = true }
+videocore = { workspace = true }
+videosemanticreducer = { workspace = true }
+videothumb = { workspace = true }
