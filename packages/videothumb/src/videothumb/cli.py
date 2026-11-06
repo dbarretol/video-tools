@@ -42,7 +42,13 @@ from videocore import (
     hint_for,
     plan,
 )
-from videocore.commands import configured, with_default_task
+from videocore.commands import (
+    HELP_FLAGS,
+    configured,
+    help_epilog,
+    with_default_task,
+    with_help,
+)
 from videocore.config import Values, add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
@@ -71,10 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
         description="Contact sheets and frames of videos, apart or in one ZIP.",
-        epilog=(
-            f"`{APP_NAME} COMMAND --help` shows the options of a command. Defaults shown are the "
-            f"built-in ones; a config file can change them (see `{APP_NAME} config --help`)."
+        epilog=help_epilog(
+            EXAMPLES,
+            f"Without a command, `{APP_NAME} PATH...` runs `sheet` (the config file can choose "
+            f"another). `{APP_NAME} help COMMAND` or `{APP_NAME} COMMAND --help` shows the "
+            "options of a command.",
+            "Defaults shown are the built-in ones; a config file can change them (see "
+            f"`{APP_NAME} help config`).",
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -198,11 +209,10 @@ def translate_legacy(argv: list[str]) -> tuple[list[str], str | None]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
+    argv = with_help(sys.argv[1:] if argv is None else argv, COMMAND_NAMES)
     if argv and argv[0] == "config":
         return config_main(argv[1:])
-    if argv and argv[0] == "gui":
+    if argv and argv[0] == "gui" and not HELP_FLAGS.intersection(argv[1:]):
         from videothumb.gui.app import launch
 
         launch()
@@ -288,6 +298,14 @@ COMMANDS = {
     Mode.FRAMES: "a folder of full-size frames per video, named after the video and the time",
     Mode.PACK: "a ZIP per video with its contact sheet and its frames, decoding the video once",
 }
+EXAMPLES = (
+    (f"{APP_NAME} clip.mp4", "clip_sheet.jpg next to the video"),
+    (f"{APP_NAME} sheet D:\\Videos -r", "a sheet for every video in the folder and its subfolders"),
+    (f"{APP_NAME} frames clip.mp4 --count 20", "20 full-size frames in clip_frames\\"),
+    (f"{APP_NAME} pack D:\\Videos -o D:\\Out", "one ZIP per video with its sheet and its frames"),
+    (f"{APP_NAME} sheet D:\\Videos --dry-run", "what would be done, without doing it"),
+    (f"{APP_NAME} gui", "the desktop app"),
+)
 
 
 def config_main(argv: list[str]) -> int:
