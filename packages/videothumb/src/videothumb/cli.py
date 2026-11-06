@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "with --video: the sheet file or snapshot folder; with --folder: a folder that "
-            "receives every output (default: next to each video)"
+            "receives every output, recreating subfolders with -r (default: next to each video)"
         ),
     )
 
@@ -121,7 +121,13 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options) -> int:
         print(f"[{done}/{total}] {result.item.name}: {status}")
 
     results = process_folder(
-        videos, mode, options, root=args.output, workers=args.workers, on_progress=progress
+        videos,
+        mode,
+        options,
+        root=args.output,
+        source=args.folder,
+        workers=args.workers,
+        on_progress=progress,
     )
     failed = [r for r in results if not r.ok]
     print(f"Done: {len(results) - len(failed)} succeeded, {len(failed)} failed.")

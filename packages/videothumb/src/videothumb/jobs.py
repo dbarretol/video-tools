@@ -7,7 +7,7 @@ import functools
 from collections.abc import Callable
 from pathlib import Path
 
-from videocore import BatchResult, default_workers, run_parallel
+from videocore import BatchResult, OutputSlot, default_workers, plan_outputs, run_parallel
 from videothumb.common import Mode
 from videothumb.sheet import SheetOptions, default_sheet_path, make_sheet
 from videothumb.snapshots import SnapshotOptions, default_snapshot_dir, make_snapshots
@@ -22,8 +22,16 @@ def default_output(video: Path, mode: Mode) -> Path:
 
 def batch_output(video: Path, mode: Mode, root: Path | None) -> Path:
     """Output of `video` in a batch: inside `root` when given, otherwise next to the video."""
-    default = default_output(video, mode)
-    return default if root is None else root / default.name
+    return slot_output(OutputSlot(root or video.parent, video.stem), mode)
+
+
+def slot_output(slot: OutputSlot, mode: Mode) -> Path:
+    """Sheet file or snapshot folder of a planned slot (see ``videocore.outputs``)."""
+    if mode is Mode.SHEET:
+        return slot.folder / f"{slot.name}_sheet.jpg"
+    # A renamed slot is the full file name (clip.mp4), which a folder next to the
+    # video cannot take, so renamed snapshot folders get a suffix.
+    return slot.folder / (f"{slot.name}_snapshots" if slot.renamed else slot.name)
 
 
 def process(video: Path, mode: Mode, options: Options, output: Path | None = None) -> Path:
@@ -43,24 +51,38 @@ def process_folder(
     options: Options,
     *,
     root: Path | None = None,
+    source: Path | None = None,
     workers: int | None = None,
     on_progress: Callable[[int, int, BatchResult], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[BatchResult]:
-    """Process `videos` in parallel processes; one failure does not stop the others."""
+    """Process `videos` in parallel processes; one failure does not stop the others.
+
+    Outputs go next to each video, or inside `root` when given; with `source`, the
+    folder that was scanned, its subfolders are recreated inside `root`. Videos
+    whose stems collide in the same place use their full file name instead
+    (``clip.mp4_sheet.jpg``). Raises ``videocore.OutputCollisionError`` before
+    processing anything if two videos would still write the same output.
+    """
+    slots = plan_outputs(videos, output=root, source=source)
     workers = workers or default_workers()
     if workers > 1:
         # Videos already run in parallel; one decoder per video avoids oversubscription.
         options = _with_workers(options, 1)
-    task = functools.partial(_process_in_batch, mode=mode, options=options, root=root)
+    task = functools.partial(_process_in_batch, mode=mode, options=options)
     return run_parallel(
-        task, videos, workers=workers, on_progress=on_progress, should_cancel=should_cancel
+        task,
+        videos,
+        item_args=slots,
+        workers=workers,
+        on_progress=on_progress,
+        should_cancel=should_cancel,
     )
 
 
-def _process_in_batch(video: Path, *, mode: Mode, options: Options, root: Path | None) -> Path:
+def _process_in_batch(video: Path, slot: OutputSlot, *, mode: Mode, options: Options) -> Path:
     # Module-level so it can be pickled into worker processes.
-    return process(video, mode, options, batch_output(video, mode, root))
+    return process(video, mode, options, slot_output(slot, mode))
 
 
 def _with_workers(options: Options, workers: int) -> Options:
