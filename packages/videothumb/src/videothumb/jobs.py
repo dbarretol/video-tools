@@ -2,25 +2,89 @@
 
 from __future__ import annotations
 
-import dataclasses
-import functools
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from videocore import (
     BatchResult,
+    ItemResult,
     OutputSlot,
-    default_workers,
+    RunOptions,
+    Status,
     part_path,
-    plan_outputs,
     remove_partials,
-    run_parallel,
+    run_task,
 )
 from videothumb.common import Mode
 from videothumb.sheet import SheetOptions, default_sheet_path, make_sheet
 from videothumb.snapshots import SnapshotOptions, default_snapshot_dir, make_snapshots
 
 Options = SheetOptions | SnapshotOptions
+
+# Rough seconds per frame with keyframe sampling, measured on 1080p H.264; precise
+# sampling depends too much on the keyframe interval to estimate.
+SECONDS_PER_SHEET_FRAME = 0.05
+SECONDS_PER_SNAPSHOT = 0.1
+
+
+@dataclass(frozen=True)
+class SheetTask:
+    """``videocore.jobs.Task`` that makes one contact sheet per video."""
+
+    name: str = "sheet"
+
+    def output(self, slot: OutputSlot) -> Path:
+        return slot_output(slot, Mode.SHEET)
+
+    def state(self, output: Path, name: str, options: SheetOptions) -> Status | None:
+        return Status.SKIPPED if has_output(output, Mode.SHEET) else None
+
+    def run(
+        self, video: Path, output: Path, name: str, options: SheetOptions, decoders: int | None
+    ) -> Path:
+        return make_sheet(video, output, options, decoders=decoders)
+
+    def cleanup(self, output: Path) -> None:
+        part_path(output).unlink(missing_ok=True)
+
+    def estimate(self, duration: float, options: SheetOptions) -> float | None:
+        if options.sampling == "precise":
+            return None
+        return 0.3 + options.count * SECONDS_PER_SHEET_FRAME
+
+
+@dataclass(frozen=True)
+class SnapshotsTask:
+    """``videocore.jobs.Task`` that saves a folder of snapshots per video."""
+
+    name: str = "snapshots"
+
+    def output(self, slot: OutputSlot) -> Path:
+        return slot_output(slot, Mode.SNAPSHOTS)
+
+    def state(self, output: Path, name: str, options: SnapshotOptions) -> Status | None:
+        return Status.SKIPPED if has_output(output, Mode.SNAPSHOTS) else None
+
+    def run(
+        self, video: Path, output: Path, name: str, options: SnapshotOptions, decoders: int | None
+    ) -> Path:
+        make_snapshots(video, output, options, decoders=decoders)
+        return output
+
+    def cleanup(self, output: Path) -> None:
+        remove_partials(output)
+
+    def estimate(self, duration: float, options: SnapshotOptions) -> float | None:
+        if options.sampling == "precise":
+            return None
+        return 0.3 + options.count * SECONDS_PER_SNAPSHOT
+
+
+TASKS: dict[Mode, SheetTask | SnapshotsTask] = {
+    Mode.SHEET: SheetTask(),
+    Mode.SNAPSHOTS: SnapshotsTask(),
+}
 
 
 def default_output(video: Path, mode: Mode) -> Path:
@@ -67,48 +131,41 @@ def process_folder(
 ) -> list[BatchResult]:
     """Process `videos` in parallel processes; one failure does not stop the others.
 
-    Outputs go next to each video, or inside `root` when given; with `source`, the
-    folder that was scanned, its subfolders are recreated inside `root`. Videos
-    whose stems collide in the same place use their full file name instead
-    (``clip.mp4_sheet.jpg``). Raises ``videocore.OutputCollisionError`` before
-    processing anything if two videos would still write the same output.
-
-    With `skip_existing`, videos whose output already exists (see `has_output`)
-    are not processed; they are returned with ``skipped=True``. By default
-    outputs are overwritten.
+    Kept for the tkinter app; new code uses ``videocore.jobs`` with `TASKS`.
+    Outputs go next to each video, or inside `root` (recreating the subfolders
+    of `source`). With `skip_existing`, videos whose output already exists are
+    returned with ``skipped=True``. Videos not finished when cancelled are left
+    out of the results.
     """
-    slots = plan_outputs(videos, output=root, source=source)
-    existing = [skip_existing and has_output(slot_output(slot, mode), mode) for slot in slots]
-    skipped = [
-        BatchResult(item=video, ok=True, value=slot_output(slot, mode), skipped=True)
-        for video, slot, exists in zip(videos, slots, existing, strict=True)
-        if exists
-    ]
-    todo = [i for i, exists in enumerate(existing) if not exists]
-    workers = workers or default_workers()
-    if workers > 1:
-        # Videos already run in parallel; one decoder per video avoids oversubscription.
-        options = _with_workers(options, 1)
-    task = functools.partial(_process_in_batch, mode=mode, options=options)
-    try:
-        processed = run_parallel(
-            task,
-            [videos[i] for i in todo],
-            item_args=[slots[i] for i in todo],
-            workers=workers,
-            on_progress=on_progress,
-            should_cancel=should_cancel,
-        )
-    finally:
-        # Workers killed on cancel or Ctrl+C leave their unfinished files behind.
-        for i in todo:
-            output = slot_output(slots[i], mode)
-            if mode is Mode.SHEET:
-                part_path(output).unlink(missing_ok=True)
-            else:
-                remove_partials(output)
-    order = {video: index for index, video in enumerate(videos)}
-    return sorted([*skipped, *processed], key=lambda result: order[result.item])
+    run = RunOptions(output=root, workers=workers, overwrite=not skip_existing)
+
+    def progress(done: int, total: int, result: ItemResult) -> None:
+        if on_progress is not None:
+            on_progress(done, total, _batch_result(result))
+
+    report = run_task(
+        TASKS[mode],
+        videos,
+        options,
+        run,
+        source=source,
+        on_progress=progress,
+        should_cancel=should_cancel,
+    )
+    return [_batch_result(item) for item in report.items if item.status is not Status.CANCELLED]
+
+
+def _batch_result(item: ItemResult) -> BatchResult:
+    skipped = item.status in (Status.SKIPPED, Status.OUTDATED)
+    return BatchResult(
+        item=item.video,
+        ok=item.ok,
+        value=item.output if skipped else item.value,
+        error=item.error,
+        skipped=skipped,
+        error_type=item.error_type,
+        seconds=item.seconds,
+    )
 
 
 def has_output(output: Path, mode: Mode) -> bool:
@@ -120,12 +177,3 @@ def has_output(output: Path, mode: Mode) -> bool:
     if mode is Mode.SHEET:
         return output.is_file()
     return output.is_dir() and any(output.glob("snapshot_*.jpg"))
-
-
-def _process_in_batch(video: Path, slot: OutputSlot, *, mode: Mode, options: Options) -> Path:
-    # Module-level so it can be pickled into worker processes.
-    return process(video, mode, options, slot_output(slot, mode))
-
-
-def _with_workers(options: Options, workers: int) -> Options:
-    return dataclasses.replace(options, workers=workers)

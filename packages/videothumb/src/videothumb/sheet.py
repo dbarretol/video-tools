@@ -42,8 +42,6 @@ class SheetOptions:
     )
     jpeg_quality: int = jpeg_quality_option()
     sampling: Sampling = sampling_option()
-    workers: int | None = None
-    """Containers decoding in parallel; use 1 when processing videos in parallel."""
 
     def __post_init__(self) -> None:
         validate(self)
@@ -57,8 +55,18 @@ def default_sheet_path(video: Path) -> Path:
     return video.with_name(f"{video.stem}_sheet.jpg")
 
 
-def make_sheet(video: str | Path, output: str | Path, options: SheetOptions | None = None) -> Path:
-    """Build the contact sheet of `video` and save it as a JPEG at `output`."""
+def make_sheet(
+    video: str | Path,
+    output: str | Path,
+    options: SheetOptions | None = None,
+    *,
+    decoders: int | None = None,
+) -> Path:
+    """Build the contact sheet of `video` and save it as a JPEG at `output`.
+
+    `decoders` limits the containers decoding in parallel (see
+    ``videocore.sample_frames``); batches pass 1 since videos already run in parallel.
+    """
     options = options or SheetOptions()
     info = probe(video)
     if info.video is None:
@@ -68,7 +76,7 @@ def make_sheet(video: str | Path, output: str | Path, options: SheetOptions | No
     width = options.thumbnail_width
     height = max(2, round(width * info.video.height / info.video.width))
     frames = sample_frames(
-        info.path, timestamps, mode=options.sampling, size=(width, height), workers=options.workers
+        info.path, timestamps, mode=options.sampling, size=(width, height), workers=decoders
     )
     decoded = sum(frame is not None for frame in frames)
     if decoded == 0:

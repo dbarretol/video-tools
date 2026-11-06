@@ -18,8 +18,6 @@ class SnapshotOptions:
     count: int = option(10, "snapshots to save", gt=0, label="Snapshots", group="snapshots")
     jpeg_quality: int = jpeg_quality_option()
     sampling: Sampling = sampling_option()
-    workers: int | None = None
-    """Containers decoding in parallel; use 1 when processing videos in parallel."""
 
     def __post_init__(self) -> None:
         validate(self)
@@ -31,9 +29,15 @@ def default_snapshot_dir(video: Path) -> Path:
 
 
 def make_snapshots(
-    video: str | Path, output_dir: str | Path, options: SnapshotOptions | None = None
+    video: str | Path,
+    output_dir: str | Path,
+    options: SnapshotOptions | None = None,
+    *,
+    decoders: int | None = None,
 ) -> list[Path]:
     """Save `options.count` snapshots as ``snapshot_001.jpg``... in `output_dir`.
+
+    `decoders` limits the containers decoding in parallel (see ``videocore.iter_frames``).
 
     Frames that cannot be decoded are skipped, so fewer files may be written;
     their numbers stay unused so names always reflect the position in the video.
@@ -50,7 +54,7 @@ def make_snapshots(
 
     saved = []
     # Full-resolution frames are written as they are decoded instead of all being held in memory.
-    frames = iter_frames(info.path, timestamps, mode=options.sampling, workers=options.workers)
+    frames = iter_frames(info.path, timestamps, mode=options.sampling, workers=decoders)
     for index, image in frames:
         if image is None:
             continue

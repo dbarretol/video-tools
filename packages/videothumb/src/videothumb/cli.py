@@ -12,20 +12,27 @@ from videocore import (
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
-    BatchResult,
+    ItemResult,
+    Plan,
+    RunOptions,
+    Status,
     UsageError,
     configure_logging,
     default_workers,
+    execute,
     find_videos,
+    plan,
 )
 from videocore.options import add_arguments, given_values, options_of
 from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
-from videothumb.jobs import Options, default_output, has_output, process, process_folder
+from videothumb.jobs import TASKS, Options, default_output
 from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
 
 logger = logging.getLogger(__name__)
+
+REDO_HINT = "use --overwrite to replace them"
 
 
 def positive_int(text: str) -> int:
@@ -90,6 +97,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Explicit: a store_false action (--overwrite) would otherwise make the default True.
     parser.set_defaults(skip_existing=False)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show what would be done, without processing anything",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
     return parser
 
@@ -110,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.video is not None:
             if not args.video.is_file():
                 raise UsageError(f"Video not found: {args.video}")
-            return run_single(args.video, mode, options, args.output, args.skip_existing)
+            return run_single(args, mode, options)
         if not args.folder.is_dir():
             raise UsageError(f"Folder not found: {args.folder}")
         return run_batch(args, mode, options)
@@ -147,18 +159,25 @@ def build_options(args: argparse.Namespace) -> Options:
     return cls(**given, sampling=sampling)
 
 
-def run_single(
-    video: Path, mode: Mode, options: Options, output: Path | None, skip_existing: bool
-) -> int:
-    target = output or default_output(video, mode)
-    if skip_existing and has_output(target, mode):
+def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
+    video = args.video
+    target = args.output or default_output(video, mode)
+    run = RunOptions(overwrite=not args.skip_existing)
+    planned = plan(TASKS[mode], [video], options, run, outputs=[target], measure=args.dry_run)
+    if args.dry_run:
+        print_plan(planned)
+        return EXIT_OK
+    if not planned.pending:
         print(f"Skipped: {target} already exists (use --overwrite to replace it)")
         return EXIT_OK
-    result = process(video, mode, options, output)
-    if mode is Mode.SHEET:
-        print(f"Contact sheet saved to {result}")
-    else:
-        print(f"Snapshots saved to {result}")
+    report = execute(planned)
+    (result,) = report.items
+    if result.status is Status.CANCELLED:
+        raise KeyboardInterrupt
+    if result.status is Status.FAILED:
+        raise RuntimeError(result.error)
+    noun = "Contact sheet" if mode is Mode.SHEET else "Snapshots"
+    print(f"{noun} saved to {result.output}")
     return EXIT_OK
 
 
@@ -167,28 +186,30 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options) -> int:
     if not videos:
         print(f"No videos found in {args.folder}")
         return EXIT_OK
+    run = RunOptions(output=args.output, workers=args.workers, overwrite=not args.skip_existing)
+    planned = plan(TASKS[mode], videos, options, run, source=args.folder)
+    if args.dry_run:
+        print_plan(planned)
+        return EXIT_OK
+    for line in planned.summary(redo_hint=REDO_HINT):
+        print(line)
 
-    def progress(done: int, total: int, result: BatchResult) -> None:
+    def progress(done: int, total: int, result: ItemResult) -> None:
         status = "ok" if result.ok else "FAILED"
-        print(f"[{done}/{total}] {result.item.name}: {status}")
+        print(f"[{done}/{total}] {result.video.name}: {status}")
 
-    results = process_folder(
-        videos,
-        mode,
-        options,
-        root=args.output,
-        source=args.folder,
-        skip_existing=args.skip_existing,
-        workers=args.workers,
-        on_progress=progress,
-    )
-    failed = [r for r in results if not r.ok]
-    skipped = sum(r.skipped for r in results)
-    succeeded = len(results) - len(failed) - skipped
-    summary = f"Done: {succeeded} succeeded, {len(failed)} failed"
+    report = execute(planned, on_progress=progress)
+    failed = report.failed
+    skipped = report.count(Status.SKIPPED)
+    summary = f"Done: {report.count(Status.OK)} succeeded, {len(failed)} failed"
     if skipped:
         summary += f", {skipped} skipped (output already exists)"
     print(summary + ".")
     for result in failed:
-        print(f"  - {result.item.name}: {result.error}", file=sys.stderr)
-    return EXIT_FAILED if failed else EXIT_OK
+        print(f"  - {result.video.name}: {result.error}", file=sys.stderr)
+    return report.exit_code
+
+
+def print_plan(planned: Plan) -> None:
+    for line in [*planned.summary(redo_hint=REDO_HINT), *planned.item_lines()]:
+        print(line)
