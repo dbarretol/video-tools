@@ -412,3 +412,21 @@ def test_grid_sets_columns_and_rows():
 
 def test_no_progress_is_accepted(clip, tmp_path):
     assert main(["archive", str(clip), "-o", str(tmp_path / "out"), "--no-progress", *FAST]) == 0
+
+
+def test_without_a_command_the_default_task_runs(clip, tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["-q", str(clip), "-o", str(out), *FAST]) == 0
+    assert (out / "clip.archive.json").is_file()
+
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  default_task: status\n", encoding="utf-8")
+    assert main([str(clip), "-o", str(out), "--config", str(config)]) == 0
+    assert "READY" in capsys.readouterr().out
+
+
+def test_the_default_task_cannot_be_a_command_that_does_not_fit(tmp_path, capsys):
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  default_task: compare\n", encoding="utf-8")
+    assert main(["config", "show", "--config", str(config)]) == 2
+    assert "default_task" in capsys.readouterr().err

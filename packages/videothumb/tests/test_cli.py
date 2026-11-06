@@ -142,10 +142,23 @@ def test_ctrl_c_exits_with_130(clip, monkeypatch, capsys):
     assert "Interrupted" in capsys.readouterr().err
 
 
-def test_a_command_is_required(clip):
-    with pytest.raises(SystemExit) as exc:
-        cli.main([str(clip)])
-    assert exc.value.code == 2
+def test_without_a_command_the_default_task_runs(clip, tmp_path, capsys):
+    out = tmp_path / "s.jpg"
+    assert cli.main([str(clip), "-o", str(out)]) == 0
+    assert out.is_file() and "Contact sheet saved" in capsys.readouterr().out
+
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  default_task: frames\n", encoding="utf-8")
+    frames = tmp_path / "f"
+    assert cli.main([str(clip), "-o", str(frames), "--count", "2", "--config", str(config)]) == 0
+    assert len(list(frames.glob("clip_f*.jpg"))) == 2
+
+
+def test_a_broken_config_is_reported_by_the_default_task(clip, tmp_path, capsys):
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  default_task: cleanup\n", encoding="utf-8")
+    assert cli.main([str(clip), "--config", str(config)]) == 2
+    assert "default_task" in capsys.readouterr().err
 
 
 def test_each_command_only_takes_its_own_options(clip, capsys):
