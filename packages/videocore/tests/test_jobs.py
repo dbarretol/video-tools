@@ -169,6 +169,27 @@ def test_eta_accounts_for_parallel_workers(videos):
     assert 100.0 <= planned.eta() < 300.0
 
 
+def test_eta_uses_the_learned_speed(videos):
+    planned = plan(FakeTask(seconds=10.0), videos[:1], Options(), speed=3.0)
+    assert planned.eta() == 30.0
+
+
+def test_report_measures_the_speed_against_the_estimates(videos, monkeypatch):
+    planned = plan(FakeTask(seconds=4.0), videos, Options(), RunOptions(workers=1))
+    report = execute(planned)
+    for item in report.items:
+        item.seconds = 2.0 if item.status is Status.OK else 50.0  # failures do not count
+    assert report.measured_speed() == pytest.approx(0.5)
+
+    # Videos run in parallel take longer each; that is not the task being slower.
+    monkeypatch.setattr(jobs.Plan, "workers", property(lambda self: 4))
+    assert report.measured_speed() == pytest.approx(0.5 / 4**0.3)
+
+    unknown = execute(plan(FakeTask(seconds=4.0), videos, Options(), measure=False))
+    assert unknown.measured_speed() is None  # no durations
+    assert execute(plan(FakeTask(seconds=None), videos, Options())).measured_speed() is None
+
+
 def test_cloud_only_files_are_not_read_and_are_reported(videos, monkeypatch):
     read = []
     monkeypatch.setattr(jobs, "_duration", lambda video: read.append(video) or 60.0)

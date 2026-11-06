@@ -70,9 +70,12 @@ def folder(clip: Path, tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def isolated_app_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep logs and settings out of the user's profile."""
+    """Keep logs, settings, state and config out of the user's profile."""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("VIDEOTHUMB_CONFIG", raising=False)
 
 
 @pytest.fixture(scope="session")

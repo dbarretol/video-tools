@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from videocore import RunOptions
+from videocore import RunOptions, State
 from videosemanticreducer.cli import main
 from videosemanticreducer.config import (
     CONFIG_ENV,
@@ -128,6 +128,9 @@ def test_process_uses_config_and_flags_override_it(clip, tmp_path):
     assert main(["process", str(clip), "--config", str(config), "--fingerprint"]) == 0
     assert (out / "clip.fingerprint.json").is_file()
 
+    # Each run teaches how fast archiving is here, for the next estimates.
+    assert State("videosemanticreducer").speed("archive") != 1.0
+
 
 def test_process_with_invalid_config_fails_cleanly(clip, tmp_path):
     config = write(tmp_path / "c.yaml", "process:\n  bogus: 1\n")
@@ -150,3 +153,28 @@ def test_template_lists_every_option_once():
 def test_run_defaults_are_validated():
     with pytest.raises(ValueError, match="workers must be greater than 0"):
         RunOptions(workers=0)
+
+
+def test_cli_config_set_and_unset_keep_the_template_comments(capsys):
+    assert main(["config", "init"]) == 0
+    assert main(["config", "set", "snap_duration", "2"]) == 0
+    assert "process.snap_duration = 2.0" in capsys.readouterr().out
+    assert load_config(default_config_path()).options.snap_duration == 2.0
+    text = default_config_path().read_text(encoding="utf-8")
+    assert "  snap_duration: 2.0  # " in text
+
+    assert main(["config", "set", "num_snapshots", "0"]) == 2  # invalid: nothing written
+    assert main(["config", "set", "bogus", "1"]) == 2
+    assert default_config_path().read_text(encoding="utf-8") == text
+
+    assert main(["config", "unset", "snap_duration"]) == 0
+    default = ProcessOptions().snap_duration
+    assert load_config(default_config_path()).options.snap_duration == default
+
+
+def test_cli_config_edit_creates_the_file_and_opens_it(monkeypatch):
+    opened = []
+    monkeypatch.setattr("videocore.config.open_in_editor", opened.append)
+    assert main(["config", "edit"]) == 0
+    assert opened == [default_config_path()]
+    assert load_config(default_config_path()) == ProcessDefaults()
