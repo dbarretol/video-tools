@@ -55,7 +55,7 @@ class SheetTask:
     def output(self, slot: OutputSlot) -> Path:
         return slot_output(slot, Mode.SHEET)
 
-    def state(self, output: Path, name: str, options: SheetOptions) -> Status | None:
+    def state(self, video: Path, output: Path, name: str, options: SheetOptions) -> Status | None:
         return Status.SKIPPED if has_output(output, Mode.SHEET) else None
 
     def run(
@@ -91,7 +91,9 @@ class SnapshotsTask:
     def output(self, slot: OutputSlot) -> Path:
         return slot_output(slot, Mode.FRAMES)
 
-    def state(self, output: Path, name: str, options: SnapshotOptions) -> Status | None:
+    def state(
+        self, video: Path, output: Path, name: str, options: SnapshotOptions
+    ) -> Status | None:
         return Status.SKIPPED if has_output(output, Mode.FRAMES) else None
 
     def run(
@@ -136,7 +138,7 @@ class PackTask:
     def output(self, slot: OutputSlot) -> Path:
         return slot_output(slot, Mode.PACK)
 
-    def state(self, output: Path, name: str, options: PackOptions) -> Status | None:
+    def state(self, video: Path, output: Path, name: str, options: PackOptions) -> Status | None:
         return Status.SKIPPED if has_output(output, Mode.PACK) else None
 
     def run(
