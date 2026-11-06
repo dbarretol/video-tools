@@ -23,10 +23,12 @@ from videocore import (
     Status,
     UsageError,
     configure_logging,
+    default_runs_dir,
     execute,
     find_videos,
     hint_for,
     plan,
+    write_run_lists,
 )
 from videocore.config import Values, add_config_commands
 from videocore.options import add_arguments, given_values, options_of
@@ -268,6 +270,8 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Va
     summary += f", {len(failed)} failed"
     if skipped:
         summary += f", {skipped} skipped (output already exists)"
+    if unfinished := report.unfinished:
+        summary += f", {len(unfinished)} not finished"
     print(summary + ".")
     for result in degraded:
         print(f"  - {result.video.name}: incomplete: {'; '.join(result.problems)}", file=sys.stderr)
@@ -277,6 +281,17 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Va
             print(f"    Hint: {result.hint}", file=sys.stderr)
     if failed:
         print(f"Details: {args.log_file}", file=sys.stderr)
+    if report.interrupted:
+        print("Interrupted; unfinished files were removed.", file=sys.stderr)
+    title = f"{APP_NAME} --folder {args.folder} --mode {mode}"
+    lists = write_run_lists(report, default_runs_dir(APP_NAME), title=title)
+    if lists.failed:
+        print(f"Videos to retry are listed in {lists.failed}")
+    if lists.pending:
+        print(
+            f"Unfinished videos are listed in {lists.pending}; to resume, run the same "
+            "command with --skip-existing"
+        )
     return report.exit_status(strict=args.strict)
 
 
