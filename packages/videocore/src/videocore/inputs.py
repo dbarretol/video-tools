@@ -100,6 +100,8 @@ def read_input_list(
     and spaces and quotes around a path are removed (the Explorer's "Copy as
     path" adds quotes). The file is UTF-8, with or without BOM. Relative paths
     are relative to the list's folder, or to the current folder for ``-``.
+    Outside Windows, a listed path with backslashes that does not exist is read
+    with forward slashes, so lists written on Windows still work.
     Raises UsageError when the file cannot be read.
     """
     if str(source) == STDIN:
@@ -129,7 +131,11 @@ def read_input_list(
         if not entry or entry.startswith("#"):
             continue
         path = Path(entry)
-        paths.append(path if path.is_absolute() else base / path)
+        path = path if path.is_absolute() else base / path
+        if os.sep != "\\" and "\\" in entry and not path.exists():
+            portable = Path(entry.replace("\\", "/"))
+            path = portable if portable.is_absolute() else base / portable
+        paths.append(path)
     return paths, warnings
 
 

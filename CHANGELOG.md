@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- `--input-list` outside Windows: paths written with backslashes, as in a list made on Windows,
+  are found too.
+
 ### Development
 
 - Continuous integration on GitHub Actions for every pull request and every push to `dev` or
