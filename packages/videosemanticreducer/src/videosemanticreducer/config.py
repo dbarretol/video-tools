@@ -1,4 +1,4 @@
-"""User defaults for the ``process`` command, read from a YAML file.
+"""User defaults for the ``archive`` command, read from a YAML file.
 
 Values are looked up in this order: command-line flags, then the config file,
 then the built-in defaults. The file is the one given with ``--config``, else
@@ -19,7 +19,7 @@ from videocore.options import options_of
 from videosemanticreducer.pipeline import ProcessOptions
 
 APP_NAME = "videosemanticreducer"
-SECTION = "process"
+SECTION = "archive"
 CONSOLE_SECTION = "console"
 
 CONFIG = AppConfig(
@@ -28,7 +28,7 @@ CONFIG = AppConfig(
         Section(SECTION, (ProcessOptions, RunOptions)),
         Section(CONSOLE_SECTION, (ConsoleOptions,), "console window and notifications"),
     ),
-    f"{APP_NAME} defaults for the `process` command.",
+    f"{APP_NAME} defaults for the `archive` command.",
 )
 CONFIG_ENV = CONFIG.env_var
 
@@ -47,7 +47,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class ProcessDefaults:
-    """The defaults of `process`: built-in ones, changed by the config file."""
+    """The defaults of `archive`: built-in ones, changed by the config file."""
 
     options: ProcessOptions = field(default_factory=ProcessOptions)
     run: RunOptions = field(default_factory=RunOptions)

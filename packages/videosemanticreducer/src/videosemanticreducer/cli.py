@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import logging
+import re
+import sys
 from pathlib import Path
+from typing import Any
 
 from rich.text import Text
 
@@ -72,7 +75,7 @@ WORDING = Wording(
     stages={
         "probe": "reading metadata",
         "snapshots": "summary video",
-        "thumbnail": "thumbnail grid",
+        "sheet": "contact sheet",
         "global_hashes": "fingerprint: global hashes",
         "keyframe_hashes": "fingerprint: keyframe hashes",
         "sha256": "file hash",
@@ -98,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
         description=(
-            "Archive videos before deleting them: summary video, thumbnail grid, "
+            "Archive videos before deleting them: summary video, contact sheet, "
             "metadata report and perceptual fingerprint."
         ),
     )
@@ -126,16 +129,24 @@ def build_parser() -> argparse.ArgumentParser:
     json_option.add_argument("--json", action="store_true", help=JSON_HELP)
     open_option = argparse.ArgumentParser(add_help=False)
     open_option.add_argument("--open", action="store_true", help="open the output folder when done")
+    open_option.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="no live progress bar; one line per video instead",
+    )
 
     # Option defaults are None so that values from the config file apply unless a flag is given.
     process = commands.add_parser(
-        "process",
+        "archive",
         parents=[config_option, json_option, open_option],
-        help="archive a video or every video in a folder",
+        help="archive videos: summary, contact sheet, report, fingerprint and manifest",
         epilog="Defaults shown are the built-in ones; a config file can change them.",
     )
     add_input_arguments(process, "videos or folders (one video: -o is its archive folder)")
     add_arguments(process, RunOptions, ProcessOptions)
+    add_sheet_grid(process)
+    add_legacy_options(process)
     process.add_argument(
         "--dry-run", action="store_true", help="show what would be done, without archiving"
     )
@@ -157,14 +168,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="archive every video again, even when its archive is complete",
     )
-    process.set_defaults(handler=cmd_process, overwrite=False)
+    process.set_defaults(handler=cmd_archive, overwrite=False)
 
     config = commands.add_parser(
         "config",
-        help="manage the defaults file of `process`",
+        help="manage the defaults file of `archive`",
         description=(
-            "Manage the defaults file of `process`. Keys are option names, "
-            "e.g. `config set snapshot_fps 2`."
+            "Manage the defaults file of `archive`. Keys are option names, "
+            "e.g. `config set num_snapshots 100` or `config set console.pause false`."
         ),
     )
     add_config_commands(config, CONFIG, parents=[common])
@@ -207,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[config_option, json_option],
         help="check that archives are complete and unchanged, before deleting originals",
         description=(
-            "Check archives made by `process`: the manifest says they are complete, every "
+            "Check archives made by `archive`: the manifest says they are complete, every "
             "artifact is still there and unchanged, and the original, if still present, is "
             "the video that was archived."
         ),
@@ -219,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         metavar="PATH",
-        help="the output folder given to `process`, if any (default: from the config file)",
+        help="the output folder given to `archive`, if any (default: from the config file)",
     )
     status.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
     status.add_argument(
@@ -238,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     found an archive that is not ready), 3 some outputs are incomplete (DEGRADED),
     2 invalid arguments, inputs or config, 130 interrupted with Ctrl+C.
     """
+    argv, deprecations = translate_legacy(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     try:
         args = parser.parse_args(argv)  # exits with 2 on invalid arguments
@@ -250,8 +262,12 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
 
     json = getattr(args, "json", False)
-    console = args.console = Console(quiet=args.quiet, json=json, tool=APP_NAME)
+    progress = getattr(args, "progress", True)
+    console = Console(quiet=args.quiet, json=json, progress=progress, tool=APP_NAME)
+    args.console = console
     console.record(command=args.command)
+    for warning in [*deprecations, *getattr(args, "deprecations", [])]:
+        console.warning(warning)
     desktop = Desktop(APP_NAME, console, WORDING, open_output=getattr(args, "open", False))
     args.desktop = desktop
     log_file = args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
@@ -295,7 +311,7 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
         raise UsageError(f"Invalid settings: {exc}") from exc
 
 
-def cmd_process(args: argparse.Namespace) -> int:
+def cmd_archive(args: argparse.Namespace) -> int:
     console: Console = args.console
     settings = process_settings(args)
     options = settings.options
@@ -368,7 +384,7 @@ def cmd_process(args: argparse.Namespace) -> int:
     if report.degraded:
         console.detail("Incomplete archives are not marked complete; the next run redoes them")
     resume = "run the same command again (archived videos are skipped)"
-    title = f"{APP_NAME} process {describe_inputs(args)}"
+    title = f"{APP_NAME} archive {describe_inputs(args)}"
     report_run_lists(console, report, APP_NAME, title=title, resume=resume)
     return report.exit_status(strict=args.strict)
 
@@ -486,6 +502,83 @@ def cmd_status(args: argparse.Namespace) -> int:
         console.info("Only sizes were compared; use --full to also compare SHA-256 hashes.")
     ready = all(check.status is ArchiveStatus.READY for check in checks)
     return EXIT_OK if ready else EXIT_FAILED
+
+
+def translate_legacy(argv: list[str]) -> tuple[list[str], list[str]]:
+    """The command line with the ``process`` command renamed ``archive``, and the warning."""
+    for index, arg in enumerate(argv):
+        if not arg.startswith("-"):  # the command: only flags without values come before it
+            if arg == "process":
+                warning = f"`{APP_NAME} process` is now `{APP_NAME} archive`"
+                return [*argv[:index], "archive", *argv[index + 1 :]], [warning]
+            break
+    return argv, []
+
+
+GRID = re.compile(r"\s*(\d+)\s*[xX]\s*(\d+)\s*")
+
+
+def parse_grid(text: str) -> tuple[int, int]:
+    """``"12x8"`` -> (12, 8): columns and rows."""
+    match = GRID.fullmatch(text)
+    if match is None or int(match[1]) == 0 or int(match[2]) == 0:
+        raise argparse.ArgumentTypeError(f"expected COLUMNSxROWS such as 12x12, got {text!r}")
+    return int(match[1]), int(match[2])
+
+
+class _SetGrid(argparse.Action):
+    def __call__(self, parser: Any, namespace: Any, values: Any, option_string: Any = None):
+        namespace.sheet_columns, namespace.sheet_rows = values
+
+
+def add_sheet_grid(parser: argparse.ArgumentParser) -> None:
+    defaults = ProcessOptions()
+    group = parser.add_argument_group("contact sheet")
+    group.add_argument(
+        "--grid",
+        type=parse_grid,
+        action=_SetGrid,
+        metavar="CxR",
+        help=(
+            "columns and rows of the contact sheet "
+            f"(default: {defaults.sheet_columns}x{defaults.sheet_rows})"
+        ),
+    )
+    parser.set_defaults(sheet_columns=None, sheet_rows=None)
+
+
+class _Deprecated(argparse.Action):
+    """A flag of earlier versions: sets what its replacement sets, and records a warning."""
+
+    def __init__(self, option_strings: list[str], dest: str, *, new: str, **kwargs: Any) -> None:
+        self.new = new
+        super().__init__(option_strings, dest, help=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser: Any, namespace: Any, values: Any, option_string: Any = None):
+        setattr(namespace, self.dest, self.const if self.nargs == 0 else values)
+        warnings = getattr(namespace, "deprecations", None) or []
+        warning = f"{option_string} is deprecated and will be removed; use {self.new}"
+        namespace.deprecations = [*warnings, warning]
+
+
+def add_legacy_options(parser: argparse.ArgumentParser) -> None:
+    """The flags of `archive` before 0.2, hidden from the help."""
+    renamed = {
+        "--video": ("summary", True, "--summary"),
+        "--no-video": ("summary", False, "--no-summary"),
+        "--thumbnail": ("sheet", True, "--sheet"),
+        "--no-thumbnail": ("sheet", False, "--no-sheet"),
+    }
+    for flag, (dest, value, new) in renamed.items():
+        parser.add_argument(flag, dest=dest, action=_Deprecated, nargs=0, const=value, new=new)
+    for flag, dest in (("--thumb-cols", "sheet_columns"), ("--thumb-rows", "sheet_rows")):
+        parser.add_argument(flag, dest=dest, action=_Deprecated, type=_positive, new="--grid CxR")
+
+
+def _positive(text: str) -> int:
+    if not text.isdigit() or int(text) == 0:
+        raise argparse.ArgumentTypeError(f"expected a whole number greater than 0, got {text!r}")
+    return int(text)
 
 
 def archive_document(check: ArchiveCheck) -> dict[str, object]:

@@ -4,13 +4,14 @@ For ``movie.mp4`` the output folder gets:
 
 - ``movie_info.txt``: metadata report.
 - ``movie_summary.mp4``: info card followed by evenly spaced snapshots.
-- ``movie_thumb.jpg``: grid of thumbnails.
+- ``movie_sheet.jpg``: contact sheet, a grid of frames (``movie_thumb.jpg`` in
+  archives made before 0.2, which are still read).
 - ``movie.fingerprint.json``: perceptual fingerprint.
 - ``movie.archive.json``: manifest listing the above, written last; it says
   ``complete: true`` only when every requested artifact was written.
 
 The video is decoded as few times as possible: the snapshots feed both the
-summary video and the thumbnail grid, and the file hash runs in a background
+summary video and the contact sheet, and the file hash runs in a background
 thread while frames are decoded.
 """
 
@@ -64,6 +65,15 @@ THUMB_MAX_SIDE = 240
 THUMB_JPEG_QUALITY = 80
 INFO_CARD_DURATION = 8.0
 OUTPUT_DIR_SUFFIX = "_summary"
+SHEET_SUFFIX = "_sheet.jpg"
+OLD_SHEET_SUFFIX = "_thumb.jpg"
+"""The name of the contact sheet before 0.2."""
+OLD_OPTION_NAMES = {
+    "thumbnail": "sheet",
+    "thumb_cols": "sheet_columns",
+    "thumb_rows": "sheet_rows",
+}
+"""Option names of manifests written before 0.2."""
 
 
 @dataclass(frozen=True)
@@ -86,20 +96,17 @@ class ProcessOptions:
         label="Seconds per snapshot",
         group="summary video",
     )
-    thumb_cols: int = option(
-        12, "thumbnail grid columns", gt=0, label="Columns", group="thumbnail grid"
+    # On the command line both are set with --grid CxR.
+    sheet_columns: int = option(
+        12, "contact sheet columns", gt=0, label="Columns", group="contact sheet", cli=False
     )
-    thumb_rows: int = option(12, "thumbnail grid rows", gt=0, label="Rows", group="thumbnail grid")
+    sheet_rows: int = option(
+        12, "contact sheet rows", gt=0, label="Rows", group="contact sheet", cli=False
+    )
     summary: bool = option(
-        True,
-        "create <name>_summary.mp4",
-        flags=("--video",),
-        label="Summary video",
-        group="artifacts",
+        True, "create <name>_summary.mp4", label="Summary video", group="artifacts"
     )
-    thumbnail: bool = option(
-        True, "create <name>_thumb.jpg", label="Thumbnail grid", group="artifacts"
-    )
+    sheet: bool = option(True, "create <name>_sheet.jpg", label="Contact sheet", group="artifacts")
     fingerprint: bool = option(
         True, "create <name>.fingerprint.json", label="Fingerprint", group="artifacts"
     )
@@ -118,11 +125,11 @@ class ProcessResult:
     timings: dict[str, float] = field(default_factory=dict)
     """Seconds spent in each step, for logging and benchmarks."""
     frames: dict[str, FrameCount] = field(default_factory=dict)
-    """Frames decoded for the summary video and the thumbnail grid."""
+    """Frames decoded for the summary video and the contact sheet."""
     problems: list[str] = field(default_factory=list)
     """Why some artifacts are incomplete; such an archive is DEGRADED, not complete."""
-    thumb_size: tuple[int, int] | None = None
-    """Expected size of the thumbnail grid."""
+    sheet_size: tuple[int, int] | None = None
+    """Expected size of the contact sheet."""
 
 
 def resolve_output_dir(video: Path, output: Path | None, *, batch: bool) -> Path:
@@ -233,23 +240,28 @@ def _write_artifacts(
     with ThreadPoolExecutor(max_workers=1) as hasher:
         sha_future = hasher.submit(fp.compute_sha256, info.path) if options.fingerprint else None
 
-        if options.summary or options.thumbnail:
+        if options.summary or options.sheet:
             with timer("snapshots"):
                 summary_path = output_dir / f"{stem}_summary.mp4"
                 thumbs = _snapshots_and_thumbs(info, summary_path, options, result, decoders)
-            if options.thumbnail:
-                with timer("thumbnail"):
+            if options.sheet:
+                with timer("sheet"):
                     result.outputs.append(
-                        _write_thumbnail(info, thumbs, output_dir / f"{stem}_thumb.jpg", options)
+                        _write_sheet(info, thumbs, output_dir / f"{stem}{SHEET_SUFFIX}", options)
                     )
-                    result.frames["thumbnail"] = FrameCount(
+                    result.frames["sheet"] = FrameCount(
                         sum(thumb is not None for thumb in thumbs), len(thumbs)
                     )
                     cell_w, cell_h = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
-                    result.thumb_size = (
-                        options.thumb_cols * cell_w,
-                        options.thumb_rows * cell_h,
+                    result.sheet_size = (
+                        options.sheet_columns * cell_w,
+                        options.sheet_rows * cell_h,
                     )
+                # A sheet under its old name would be left next to the new one, unlisted.
+                old = output_dir / f"{stem}{OLD_SHEET_SUFFIX}"
+                if old.is_file():
+                    logger.info("Removing %s, replaced by %s%s", old, stem, SHEET_SUFFIX)
+                    old.unlink()
 
         if sha_future is None:
             return None
@@ -278,14 +290,14 @@ def verify_artifacts(result: ProcessResult, options: ProcessOptions) -> list[str
             count = result.frames["summary"]
             expected = INFO_CARD_DURATION + count.decoded * options.snap_duration
             check_video(path, duration=expected)
-        elif path.name.endswith("_thumb.jpg"):
-            check_image(path, size=result.thumb_size)
+        elif path.name.endswith((SHEET_SUFFIX, OLD_SHEET_SUFFIX)):
+            check_image(path, size=result.sheet_size)
         elif path.name.endswith(".fingerprint.json"):
             fp.check_complete(fp.load_fingerprint(path))
         else:
             check_file(path)
     for what, count in result.frames.items():
-        label = "summary video" if what == "summary" else "thumbnail grid"
+        label = "summary video" if what == "summary" else "contact sheet"
         if problem := count.problem(label):
             problems.append(problem)
     return problems
@@ -298,7 +310,16 @@ def _recorded_options(options: ProcessOptions) -> dict[str, object]:
 
 ARCHIVE_COMPLETE = "complete"
 ARCHIVE_OUTDATED = "outdated"
-_ARTIFACT_TOGGLES = ("summary", "thumbnail", "fingerprint")
+_ARTIFACT_TOGGLES = ("summary", "sheet", "fingerprint")
+
+
+def recorded_options(manifest: dict | None) -> dict[str, object]:
+    """The options a manifest was made with, by their current names."""
+    recorded = dict((manifest or {}).get("options") or {})
+    for old, new in OLD_OPTION_NAMES.items():
+        if old in recorded:
+            recorded.setdefault(new, recorded.pop(old))
+    return recorded
 
 
 def archive_state(output_dir: Path, name: str, options: ProcessOptions) -> str | None:
@@ -314,7 +335,7 @@ def archive_state(output_dir: Path, name: str, options: ProcessOptions) -> str |
     path = manifest_path(output_dir, name)
     if not is_complete(path):
         return None
-    recorded = (read_manifest(path) or {}).get("options") or {}
+    recorded = recorded_options(read_manifest(path))
     wanted = _recorded_options(options)
     if any(wanted[toggle] and not recorded.get(toggle) for toggle in _ARTIFACT_TOGGLES):
         return None
@@ -376,10 +397,10 @@ def _snapshots_and_thumbs(
 ) -> list[Image.Image | None]:
     """Decode the snapshots once: encode the summary and keep small copies for the grid.
 
-    Returns the grid thumbnails (empty when no thumbnail grid was requested).
+    Returns the cells of the contact sheet (empty when no sheet was requested).
     """
     assert info.video is not None
-    cells = options.thumb_cols * options.thumb_rows
+    cells = options.sheet_columns * options.sheet_rows
     thumb_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     if not options.summary:
         timestamps = snapshot_timestamps(info.duration, cells)
@@ -388,7 +409,7 @@ def _snapshots_and_thumbs(
             timestamps,
             size=thumb_size,
             workers=decoders,
-            stage="thumbnail",
+            stage="sheet",
             fallback=True,
         )
 
@@ -396,7 +417,7 @@ def _snapshots_and_thumbs(
     timestamps = snapshot_timestamps(info.duration, options.num_snapshots)
     # With enough snapshots, grid cell i shows the snapshot nearest to its own evenly
     # spaced position; otherwise the grid is sampled separately afterwards.
-    reuse_for_grid = options.thumbnail and options.num_snapshots >= cells
+    reuse_for_grid = options.sheet and options.num_snapshots >= cells
     grid_sources = _grid_sources(options.num_snapshots, cells) if reuse_for_grid else {}
     thumbs: list[Image.Image | None] = [None] * cells if reuse_for_grid else []
     decoded = 0
@@ -428,13 +449,13 @@ def _snapshots_and_thumbs(
         logger.warning("Decoded %d/%d snapshots of %s", decoded, len(timestamps), info.path)
     result.outputs.append(summary_path)
 
-    if options.thumbnail and not reuse_for_grid:
+    if options.sheet and not reuse_for_grid:
         thumbs = sample_frames(
             info.path,
             snapshot_timestamps(info.duration, cells),
             size=thumb_size,
             workers=decoders,
-            stage="thumbnail",
+            stage="sheet",
             fallback=True,
         )
     return thumbs
@@ -449,22 +470,22 @@ def _grid_sources(snapshots: int, cells: int) -> dict[int, list[int]]:
     return sources
 
 
-def _write_thumbnail(
+def _write_sheet(
     info: VideoInfo, thumbs: list[Image.Image | None], path: Path, options: ProcessOptions
 ) -> Path:
     decoded = sum(thumb is not None for thumb in thumbs)
     if decoded == 0:
-        raise NoFramesError(f"No thumbnail could be decoded from {info.path}")
+        raise NoFramesError(f"No frame of the contact sheet could be decoded from {info.path}")
     if decoded < len(thumbs):
         logger.warning(
-            "Thumbnail grid of %s has %d/%d cells; the rest are black",
+            "Contact sheet of %s has %d/%d cells; the rest are black",
             info.path,
             decoded,
             len(thumbs),
         )
     assert info.video is not None
     cell_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
-    grid = compose_grid(thumbs, options.thumb_cols, cell_size=cell_size)
+    grid = compose_grid(thumbs, options.sheet_columns, cell_size=cell_size)
     with atomic_write(path) as part:
         grid.save(part, "JPEG", quality=THUMB_JPEG_QUALITY)
     return path
