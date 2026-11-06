@@ -26,7 +26,15 @@ from typing import Any
 
 import imagehash
 
-from videocore import VideoInfo, atomic_write, compose_grid, evenly_spaced, progress, sample_frames
+from videocore import (
+    NoVideoStreamError,
+    VideoInfo,
+    atomic_write,
+    compose_grid,
+    evenly_spaced,
+    progress,
+    sample_frames,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +56,11 @@ MIN_KEYFRAME_RATIO = 0.5
 
 class IncompleteFingerprintError(RuntimeError):
     """The video could not be hashed well enough to verify a copy against it later."""
+
+    hint = (
+        "too few frames could be decoded to recognize this video later, so it was not "
+        "archived; the file may be damaged (check that it plays)"
+    )
 
 
 def compute_sha256(path: str | os.PathLike[str]) -> str:
@@ -174,7 +187,7 @@ def compute_fingerprint(
     when too few frames could be decoded.
     """
     if not info.has_video:
-        raise ValueError(f"No video stream in {info.path}")
+        raise NoVideoStreamError(f"No video stream in {info.path}")
     if sha256 is None:
         sha256 = compute_sha256(info.path)
     global_hashes = compute_global_hashes(info, workers=workers)

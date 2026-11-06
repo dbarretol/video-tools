@@ -27,6 +27,8 @@ from pathlib import Path
 from PIL import Image
 
 from videocore import (
+    NoFramesError,
+    NoVideoStreamError,
     OutputSlot,
     Status,
     VideoInfo,
@@ -183,7 +185,7 @@ def process_video(
         info = probe(video)
     if not info.has_video:
         # Nothing could prove later that a copy matches this file, so it is not archived.
-        raise ValueError(f"No video stream in {video}")
+        raise NoVideoStreamError(f"No video stream in {video}")
     stem = name or video.stem
     output_dir.mkdir(parents=True, exist_ok=True)
     remove_partials(output_dir)  # left by a run that was killed
@@ -419,7 +421,7 @@ def _snapshots_and_thumbs(
             for cell in grid_sources.get(index, ()):
                 thumbs[cell] = image.resize(thumb_size, Image.Resampling.BILINEAR)
         if decoded == 0:
-            raise RuntimeError(f"No snapshot could be decoded from {info.path}")
+            raise NoFramesError(f"No snapshot could be decoded from {info.path}")
 
     result.frames["summary"] = FrameCount(decoded, len(timestamps))
     if decoded < len(timestamps):
@@ -452,7 +454,7 @@ def _write_thumbnail(
 ) -> Path:
     decoded = sum(thumb is not None for thumb in thumbs)
     if decoded == 0:
-        raise RuntimeError(f"No thumbnail could be decoded from {info.path}")
+        raise NoFramesError(f"No thumbnail could be decoded from {info.path}")
     if decoded < len(thumbs):
         logger.warning(
             "Thumbnail grid of %s has %d/%d cells; the rest are black",

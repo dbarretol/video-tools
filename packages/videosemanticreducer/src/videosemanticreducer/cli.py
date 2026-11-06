@@ -22,6 +22,7 @@ from videocore import (
     configure_logging,
     execute,
     find_videos,
+    hint_for,
     plan,
     probe,
 )
@@ -173,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     level = logging.DEBUG if args.verbose else logging.INFO
     log_file = configure_logging(APP_NAME, level=level, console=True)
     logger.debug("Logging to %s", log_file)
+    args.log_file = log_file
     try:
         return args.handler(args)
     except KeyboardInterrupt:
@@ -184,7 +186,10 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("%s", exc)
+        if hint := hint_for(exc):
+            logger.error("  Hint: %s", hint)
         logger.debug("Details", exc_info=True)
+        logger.info("Details: %s", log_file)
         return EXIT_FAILED
 
 
@@ -227,6 +232,7 @@ def cmd_process(args: argparse.Namespace) -> int:
             raise KeyboardInterrupt
         if result.status is Status.FAILED:
             logger.error("Could not archive %s: %s", args.input, result.error)
+            log_failure_details(result, args.log_file)
         elif result.status is Status.DEGRADED:
             logger.warning(
                 "Archived %s, but incomplete: %s", args.input, "; ".join(result.problems)
@@ -272,9 +278,19 @@ def cmd_process(args: argparse.Namespace) -> int:
         logger.warning("Incomplete: %s (%s)", result.video, "; ".join(result.problems))
     for result in failed:
         logger.error("Failed: %s (%s)", result.video, result.error)
+        if result.hint:
+            logger.error("  Hint: %s", result.hint)
+    if failed:
+        logger.info("Details: %s", args.log_file)
     if degraded:
         logger.info("Incomplete archives are not marked complete; the next run redoes them")
     return report.exit_status(strict=args.strict)
+
+
+def log_failure_details(result: ItemResult, log_file: Path) -> None:
+    if result.hint:
+        logger.error("  Hint: %s", result.hint)
+    logger.info("Details: %s", log_file)
 
 
 def stage_logger(level: int):
