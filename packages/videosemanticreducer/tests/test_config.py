@@ -8,11 +8,13 @@ from videosemanticreducer.config import (
     CONFIG_ENV,
     ConfigError,
     ProcessDefaults,
+    RunDefaults,
     default_config_path,
     find_config,
     load_config,
     render_template,
 )
+from videosemanticreducer.pipeline import ProcessOptions
 
 
 def write(path: Path, text: str) -> Path:
@@ -28,7 +30,9 @@ def test_template_round_trips_to_the_builtin_defaults(tmp_path):
 
 def test_partial_config_keeps_other_defaults(tmp_path):
     path = write(tmp_path / "c.yaml", "process:\n  num_snapshots: 60\n  summary: false\n")
-    assert load_config(path) == ProcessDefaults(num_snapshots=60, summary=False)
+    assert load_config(path) == ProcessDefaults(
+        options=ProcessOptions(num_snapshots=60, summary=False)
+    )
 
 
 def test_empty_file_and_no_file_give_defaults(tmp_path):
@@ -38,12 +42,12 @@ def test_empty_file_and_no_file_give_defaults(tmp_path):
 
 def test_relative_output_is_relative_to_the_config_file(tmp_path):
     path = write(tmp_path / "c.yaml", "process:\n  output: archive\n")
-    assert load_config(path).output == tmp_path / "archive"
+    assert load_config(path).run.output == tmp_path / "archive"
 
 
 def test_integer_snap_duration_is_accepted(tmp_path):
     path = write(tmp_path / "c.yaml", "process:\n  snap_duration: 1\n")
-    assert load_config(path).snap_duration == 1.0
+    assert load_config(path).options.snap_duration == 1.0
 
 
 @pytest.mark.parametrize(
@@ -56,6 +60,9 @@ def test_integer_snap_duration_is_accepted(tmp_path):
         ("other:\n  x: 1\n", "single 'process:' section"),
         ("process: [1, 2]\n", "must be a mapping"),
         ("process:\n  num_snapshots: [\n", "Could not read"),
+        ("process:\n  num_snapshots: 0\n", "'num_snapshots' must be greater than 0, got 0"),
+        ("process:\n  workers: 0\n", "'workers' must be greater than 0"),
+        ("process:\n  output: 3\n", "'output' must be a path or null"),
     ],
 )
 def test_invalid_config(tmp_path, text, message):
@@ -131,3 +138,15 @@ def test_process_with_invalid_config_fails_cleanly(clip, tmp_path):
 def test_process_with_out_of_range_config_values_is_a_usage_error(clip, tmp_path, setting):
     config = write(tmp_path / "c.yaml", f"process:\n  {setting}\n")
     assert main(["process", str(clip), "--config", str(config)]) == 2
+
+
+def test_template_lists_every_option_once():
+    keys = yaml.safe_load(render_template())["process"]
+    expected = [f.name for f in ProcessOptions.__dataclass_fields__.values() if f.metadata]
+    assert list(keys) == expected + ["output", "workers", "recursive"]
+    assert "# videos processed in parallel for folders; null = automatic" in render_template()
+
+
+def test_run_defaults_are_validated():
+    with pytest.raises(ValueError, match="workers must be greater than 0"):
+        RunDefaults(workers=0)

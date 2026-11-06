@@ -148,3 +148,22 @@ def test_mode_is_required(clip):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--video", str(clip)])
     assert exc.value.code == 2
+
+
+def test_flags_of_the_other_mode_are_reported(clip, tmp_path, caplog):
+    out = tmp_path / "sheet.jpg"
+    args = ["--video", str(clip), "--mode", "sheet", "--count", "3", "-o", str(out)]
+    assert cli.main(args) == 0
+    assert "--count does not apply to --mode sheet; ignored" in caplog.text
+
+
+def test_options_share_one_declaration():
+    from videothumb.sheet import SheetOptions
+    from videothumb.snapshots import SnapshotOptions
+
+    args = cli.build_parser().parse_args(["--video", "x", "--mode", "snapshots", "--quality", "70"])
+    options = cli.build_options(args)
+    assert options == SnapshotOptions(jpeg_quality=70)
+    assert cli.build_options(
+        cli.build_parser().parse_args(["--video", "x", "--mode", "sheet"])
+    ) == (SheetOptions())
