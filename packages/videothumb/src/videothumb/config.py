@@ -1,7 +1,8 @@
 """Defaults of the command line, read from a YAML file (see ``videocore.config``).
 
-One section per mode, plus ``run`` for how folders are processed. The desktop
-app does not read this file.
+One section per command (``sheet``, ``frames``, ``pack``), plus ``run`` for how
+batches are processed and ``console`` for the window, notifications and the
+default task. The desktop app does not read this file.
 """
 
 from __future__ import annotations
@@ -41,8 +42,8 @@ CONFIG = AppConfig(
         Section(Mode.SHEET.value, (SheetOptions,), "videothumb sheet"),
         Section(Mode.FRAMES.value, (SnapshotOptions,), "videothumb frames"),
         Section(Mode.PACK.value, (PackOptions,), "videothumb pack"),
-        # The output depends on --video or --folder, so it is not a default.
-        Section(RUN_SECTION, (RunOptions,), "--folder", skip=("output",)),
+        # The meaning of -o depends on the number of videos, so it is not a default.
+        Section(RUN_SECTION, (RunOptions,), "several videos", skip=("output",)),
         Section(
             CONSOLE_SECTION,
             (ConsoleOptions, TaskOptions),

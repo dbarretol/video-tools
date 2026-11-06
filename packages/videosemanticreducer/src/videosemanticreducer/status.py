@@ -128,7 +128,7 @@ def find_archives(
 ) -> list[ArchiveCheck]:
     """Check the archive of a video, every archive in an archive folder, or a whole folder.
 
-    For a folder, each video is paired with its archive where ``process`` would
+    For a folder, each video is paired with its archive where ``archive`` would
     have put it (see `output`), and archive folders inside it whose original is
     gone are listed too.
     """

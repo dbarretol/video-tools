@@ -377,7 +377,8 @@ def cmd_archive(args: argparse.Namespace) -> int:
     if args.dry_run:
         return EXIT_OK
     if planned.pending:
-        console.info(f"Up to {planned.workers} videos processed in parallel")
+        if planned.workers > 1:
+            console.info(f"Up to {planned.workers} videos processed in parallel")
 
     with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
         report = execute(planned, on_progress=progress.on_progress, on_event=progress.on_event)
