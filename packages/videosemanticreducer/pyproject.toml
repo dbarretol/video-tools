@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "imagehash>=4.3.2",
     "pyyaml>=6.0.3",
-    "videoconsole",
+    "videoconsole[notify]",
     "videocore",
 ]
 

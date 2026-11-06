@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "videoconsole",
+    "videoconsole[notify]",
     "videocore",
 ]
 
