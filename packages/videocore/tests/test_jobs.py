@@ -262,3 +262,62 @@ def test_degraded_runs_exit_with_3_or_1_when_strict(tmp_path):
     assert report.items[0].status is Status.DEGRADED
     assert report.exit_code == 3
     assert report.exit_status(strict=True) == 1
+
+
+class InterruptedTask(FakeTask):
+    def run(self, video, output, name, options, decoders):
+        if video.name.startswith("b"):
+            raise KeyboardInterrupt
+        return super().run(video, output, name, options, decoders)
+
+
+def test_ctrl_c_returns_a_report_of_what_was_finished(videos):
+    task = InterruptedTask()
+    report = execute(plan(task, videos, Options(), RunOptions(workers=1)))
+
+    assert report.interrupted
+    assert [r.status for r in report.items] == [Status.OK, Status.CANCELLED, Status.CANCELLED]
+    assert [r.video.name for r in report.unfinished] == ["b.mp4", "bad.mp4"]
+    assert report.exit_code == 130
+    assert len(task.cleaned) == 3  # every pending output, finished or not
+
+
+def test_run_lists_name_the_videos_to_retry(videos, tmp_path):
+    from datetime import datetime
+
+    paths = [*videos, tmp_path / "thin.mp4", tmp_path / "c.mp4"]
+    paths[3].write_bytes(b"x")
+    paths[4].write_bytes(b"x")
+    report = execute(plan(FakeTask(), paths, Options(), RunOptions(workers=1)))
+    report.items[4].status = Status.CANCELLED
+    folder = tmp_path / "runs"
+
+    lists = jobs.write_run_lists(
+        report, folder, title="tool --folder x", now=datetime(2026, 1, 2, 3, 4, 5)
+    )
+
+    assert lists.failed == folder / "20260102-030405_fake_failed.txt"
+    raw = lists.failed.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")  # BOM, for PowerShell 5.1
+    lines = lists.failed.read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "# tool --folder x"
+    entries = [line for line in lines if not line.startswith("#")]
+    assert entries == [str(paths[2].resolve()), str(paths[3].resolve())]
+    assert "# FAILED: ValueError: cannot read bad.mp4" in lines
+    assert "# DEGRADED: only 1/10 frames" in lines
+    pending = lists.pending.read_text(encoding="utf-8-sig").splitlines()
+    assert pending[-1] == str(paths[4].resolve())
+
+
+def test_run_lists_are_only_written_when_needed_and_old_ones_go(videos, tmp_path, monkeypatch):
+    from datetime import datetime
+
+    folder = tmp_path / "runs"
+    ok = execute(plan(FakeTask(), videos[:2], Options(), RunOptions(workers=1)))
+    assert jobs.write_run_lists(ok, folder, title="t") == jobs.RunLists()
+
+    monkeypatch.setattr(jobs, "KEPT_RUN_LISTS", 2)
+    failing = execute(plan(FakeTask(), videos[2:], Options(), RunOptions(workers=1)))
+    for day in (1, 2, 3):
+        jobs.write_run_lists(failing, folder, title="t", now=datetime(2026, 1, day))
+    assert sorted(p.name[:8] for p in folder.iterdir()) == ["20260102", "20260103"]

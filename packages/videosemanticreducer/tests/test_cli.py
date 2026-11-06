@@ -255,3 +255,26 @@ def test_failures_come_with_a_hint_and_the_log_path(audio_only, clip, tmp_path, 
     (folder / "broken.mp4").write_bytes(b"not a video")
     assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 1
     assert "Hint: the file may be damaged" in caplog.text
+
+
+def test_interrupted_batch_says_how_to_resume(clip, tmp_path, monkeypatch, caplog):
+    from videocore import default_runs_dir
+    from videosemanticreducer import pipeline
+
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    for name in ("a.mp4", "b.mp4"):
+        shutil.copy(clip, folder / name)
+    real = pipeline.process_video
+
+    def stop_at_b(video, *args, **kwargs):
+        if video.name == "b.mp4":
+            raise KeyboardInterrupt
+        return real(video, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "process_video", stop_at_b)
+    assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 130
+    assert "1 archived" in caplog.text and "1 not finished" in caplog.text
+    assert "run the same command again to resume" in caplog.text
+    (pending,) = default_runs_dir("videosemanticreducer").glob("*_archive_pending.txt")
+    assert str((folder / "b.mp4").resolve()) in pending.read_text(encoding="utf-8-sig")

@@ -258,3 +258,37 @@ def test_failures_come_with_a_hint_and_the_log_path(folder, tmp_path, capsys):
     err = capsys.readouterr().err
     assert "  - broken.mp4: VideoOpenError" in err
     assert "    Hint: the file may be damaged" in err
+
+
+def test_interrupted_batch_lists_what_is_left(folder, monkeypatch, capsys):
+    from pathlib import Path
+
+    from videocore import default_runs_dir
+    from videothumb import jobs
+
+    real = jobs.make_sheet
+
+    def stop_at_b(video, *args, **kwargs):
+        if video.name.startswith("b"):
+            raise KeyboardInterrupt
+        return real(video, *args, **kwargs)
+
+    monkeypatch.setattr(jobs, "make_sheet", stop_at_b)
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 130
+    captured = capsys.readouterr()
+    assert "Interrupted" in captured.err
+    assert "with --skip-existing" in captured.out
+    (pending,) = default_runs_dir("videothumb").glob("*_sheet_pending.txt")
+    lines = pending.read_text(encoding="utf-8-sig").splitlines()
+    names = [Path(line).name for line in lines if not line.startswith("#")]
+    assert names == ["b.mkv", "broken.mp4"]
+    assert (folder / "a_sheet.jpg").is_file()
+
+
+def test_failed_batch_lists_the_videos_to_retry(folder, capsys):
+    from videocore import default_runs_dir
+
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
+    assert "Videos to retry are listed in" in capsys.readouterr().out
+    (failed,) = default_runs_dir("videothumb").glob("*_sheet_failed.txt")
+    assert str((folder / "broken.mp4").resolve()) in failed.read_text(encoding="utf-8-sig")
