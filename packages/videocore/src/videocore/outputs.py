@@ -57,17 +57,22 @@ def output_folder(video: Path, output: Path | None, source: Path | None) -> Path
 
 
 def plan_outputs(
-    videos: Sequence[Path], *, output: Path | None = None, source: Path | None = None
+    videos: Sequence[Path],
+    *,
+    output: Path | None = None,
+    source: Path | Sequence[Path | None] | None = None,
 ) -> list[OutputSlot]:
     """One slot per video, in the same order.
 
     `output` is the folder chosen by the user, if any; `source` is the folder that
-    was scanned, so that its subfolders are recreated inside `output`.
+    was scanned, so that its subfolders are recreated inside `output`, or one
+    such folder per video (None for videos given by themselves).
     Raises OutputCollisionError when two videos would get the same folder and
     name even after the rename, which can only happen with unusual file names
     such as ``clip.mp4.mkv`` next to ``clip.mp4`` and ``clip.mkv``.
     """
-    folders = [output_folder(video, output, source) for video in videos]
+    sources = list(source) if isinstance(source, list | tuple) else [source] * len(videos)
+    folders = [output_folder(v, output, s) for v, s in zip(videos, sources, strict=True)]
     by_stem: dict[tuple[str, str], list[int]] = defaultdict(list)
     for index, (video, folder) in enumerate(zip(videos, folders, strict=True)):
         by_stem[_key(folder, video.stem)].append(index)

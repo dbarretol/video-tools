@@ -17,6 +17,13 @@ from videocore.errors import (
 )
 from videocore.frames import evenly_spaced, iter_frames, sample_frames
 from videocore.grid import compose_grid
+from videocore.inputs import (
+    Inputs,
+    InvalidInput,
+    collect_inputs,
+    expand_path,
+    read_input_list,
+)
 from videocore.jobs import (
     ItemResult,
     Plan,
@@ -49,6 +56,11 @@ from videocore.state import State
 __version__ = version("videocore")
 
 __all__ = [
+    "Inputs",
+    "InvalidInput",
+    "collect_inputs",
+    "expand_path",
+    "read_input_list",
     "EXIT_DEGRADED",
     "EXIT_FAILED",
     "EXIT_INTERRUPTED",

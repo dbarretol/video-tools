@@ -28,6 +28,7 @@ from typing import Any, Protocol
 
 from videocore.batch import BatchResult, default_workers, is_offline, run_parallel
 from videocore.errors import EXIT_DEGRADED, EXIT_FAILED, EXIT_INTERRUPTED, EXIT_OK
+from videocore.inputs import InvalidInput
 from videocore.logging_setup import default_log_dir
 from videocore.options import option, validate
 from videocore.outputs import OutputSlot, plan_outputs
@@ -37,6 +38,7 @@ from videocore.progress import ProgressEvent
 logger = logging.getLogger(__name__)
 
 PROBE_THREADS = 8
+INVALID_HINT = "check the path; if it is in an input list, fix or remove that line"
 KEPT_RUN_LISTS = 20
 """Runs whose retry lists are kept in the runs folder; older ones are deleted."""
 PARALLEL_GAIN = 0.7
@@ -133,11 +135,14 @@ class PlannedItem:
     name: str
     """Base name of the outputs: the stem, or the file name when stems collide."""
     state: Status | None
-    """None when it will be processed; SKIPPED or OUTDATED otherwise."""
+    """None when it will be processed; SKIPPED or OUTDATED when already done; FAILED
+    when it cannot be processed (see `error`)."""
     offline: bool = False
     """Only in the cloud (e.g. a OneDrive placeholder): reading it downloads it."""
     duration: float | None = None
     """Seconds of video, measured for pending items only; None when unknown."""
+    error: str | None = None
+    """Why a FAILED item cannot be processed, e.g. "not found"."""
 
     @property
     def pending(self) -> bool:
@@ -198,6 +203,8 @@ class Plan[T]:
             parts.append(f"{skipped} already done")
         if outdated := self.count(Status.OUTDATED):
             parts.append(f"{outdated} done with other settings ({redo_hint})")
+        if invalid := self.count(Status.FAILED):
+            parts.append(f"{invalid} not found")
         noun = "video" if len(self.items) == 1 else "videos"
         lines = [f"{len(self.items)} {noun}: " + ", ".join(parts)]
         if pending:
@@ -225,6 +232,9 @@ class Plan[T]:
         labels = {Status.SKIPPED: "already done", Status.OUTDATED: "done with other settings"}
         lines = []
         for item in self.items:
+            if item.state is Status.FAILED:
+                lines.append(f"  [skip, {item.error}] {self.show(item.video)}")
+                continue
             action = "process" if item.pending else f"skip, {labels.get(item.state, item.state)}"
             lines.append(f"  [{action}] {self.show(item.video)} -> {self.show(item.output)}")
         return lines
@@ -245,21 +255,25 @@ def plan[T](
     options: T,
     run: RunOptions | None = None,
     *,
-    source: Path | None = None,
+    source: Path | Sequence[Path | None] | None = None,
     outputs: Sequence[Path] | None = None,
+    invalid: Sequence[InvalidInput] = (),
     measure: bool = True,
     speed: float = 1.0,
 ) -> Plan[T]:
     """Decide what to do with each video; nothing is written.
 
     Outputs follow ``videocore.outputs.plan_outputs`` (next to each video or
-    inside ``run.output``, recreating the subfolders of `source`), unless
+    inside ``run.output``, recreating the subfolders of `source`, which can
+    also be one folder per video, as in ``videocore.Inputs.roots``), unless
     `outputs` gives one explicit output per video. Raises
     ``videocore.OutputCollisionError`` if two videos would write the same output.
     Unless ``run.overwrite``, videos whose outputs are already finished are
     marked SKIPPED or OUTDATED (see `Task.state`). With `measure`, the duration
     of each pending video is read, except for files only available in the cloud.
     `speed` corrects the task's estimates for this computer (see `Plan.speed`).
+    `invalid` inputs (e.g. listed paths that do not exist) are planned as FAILED,
+    after the videos, so the report lists them.
     """
     run = run or RunOptions()
     if outputs is not None:
@@ -276,6 +290,12 @@ def plan[T](
         items.append(PlannedItem(video, output, name, state, offline=is_offline(video)))
     if measure:
         items = _measure(items)
+    for entry in invalid:
+        failed = PlannedItem(entry.path, entry.path, entry.path.name, Status.FAILED)
+        items.append(dataclasses.replace(failed, error=entry.reason))
+    if isinstance(source, list | tuple):
+        roots = set(source)
+        source = roots.pop() if len(roots) == 1 else None
     return Plan(task, options, run, tuple(items), source=source, speed=speed)
 
 
@@ -417,7 +437,10 @@ def execute[T](
     report = RunReport(planned, interrupted=interrupted)
     for item in planned.items:
         if item.state is not None:
-            report.items.append(ItemResult(item.video, item.output, item.state))
+            hint = INVALID_HINT if item.state is Status.FAILED else None
+            report.items.append(
+                ItemResult(item.video, item.output, item.state, error=item.error, hint=hint)
+            )
         elif item.video in by_video:
             report.items.append(_item_result(by_video[item.video], item.output))
         else:
