@@ -10,25 +10,29 @@ import logging
 import sys
 from pathlib import Path
 
+from videoconsole import (
+    Console,
+    RunProgress,
+    Wording,
+    print_plan,
+    print_report,
+    report_run_lists,
+    setup_logging,
+)
 from videocore import (
     EXIT_FAILED,
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
-    ItemResult,
-    Plan,
-    ProgressEvent,
     RunOptions,
     State,
     Status,
     UsageError,
     configure_logging,
-    default_runs_dir,
     execute,
     find_videos,
     hint_for,
     plan,
-    write_run_lists,
 )
 from videocore.config import Values, add_config_commands
 from videocore.options import add_arguments, given_values, options_of
@@ -41,7 +45,13 @@ from videothumb.snapshots import SnapshotOptions
 
 logger = logging.getLogger(__name__)
 
-REDO_HINT = "use --overwrite to replace them"
+WORDING = Wording(
+    verb="Processing",
+    done="succeeded",
+    skipped="skipped (output already exists)",
+    redo_hint="use --overwrite to replace them",
+    stages={"verify": "checking outputs"},
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -108,8 +118,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1)",
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
+    add_verbosity(parser)
     return parser
+
+
+def add_verbosity(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="only show warnings, errors and what to do about them",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,41 +144,34 @@ def main(argv: list[str] | None = None) -> int:
         return config_main(argv[1:])
 
     args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
-    args.log_file = configure_logging(
-        APP_NAME, level=logging.DEBUG if args.verbose else logging.INFO
-    )
+    console = Console(quiet=args.quiet)
+    args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
     try:
         config_path = CONFIG.find(args.config)
         if config_path is not None:
             logger.debug("Using defaults from %s", config_path)
         values = CONFIG.load(config_path)
-        mode, options = Mode(args.mode), build_options(args, values)
+        mode, options = Mode(args.mode), build_options(args, values, console)
         if args.video is not None:
             if not args.video.is_file():
                 raise UsageError(f"Video not found: {args.video}")
-            return run_single(args, mode, options)
+            return run_single(args, console, mode, options)
         if not args.folder.is_dir():
             raise UsageError(f"Folder not found: {args.folder}")
-        return run_batch(args, mode, options, values)
+        return run_batch(args, console, mode, options, values)
     except KeyboardInterrupt:
         logger.info("Interrupted", exc_info=True)
-        print("Interrupted; unfinished files were removed.", file=sys.stderr)
+        console.detail("Interrupted; unfinished files were removed.", "warning")
         return EXIT_INTERRUPTED
     except UsageError as exc:
         logger.error("Usage error: %s", exc, exc_info=True)
-        print(f"Error: {exc}", file=sys.stderr)
+        console.error(str(exc))
         return EXIT_USAGE
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("Failed: %s", exc, exc_info=True)
-        print(f"Error: {exc}", file=sys.stderr)
-        print_hint(hint_for(exc), args.log_file)
+        console.error(str(exc))
+        console.hint(hint_for(exc), args.log_file)
         return EXIT_FAILED
-
-
-def print_hint(hint: str | None, log_file: Path) -> None:
-    if hint:
-        print(f"  Hint: {hint}", file=sys.stderr)
-    print(f"Details: {log_file}", file=sys.stderr)
 
 
 MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions]] = {
@@ -192,7 +205,9 @@ def config_main(argv: list[str]) -> int:
         return EXIT_FAILED
 
 
-def build_options(args: argparse.Namespace, values: Values | None = None) -> Options:
+def build_options(
+    args: argparse.Namespace, values: Values | None = None, console: Console | None = None
+) -> Options:
     """The options of the selected mode: flags, then the config file `values`, then defaults.
 
     Warns about flags that only apply to another mode.
@@ -204,103 +219,66 @@ def build_options(args: argparse.Namespace, values: Values | None = None) -> Opt
     for other in MODE_OPTIONS.values():
         for opt in options_of(other):
             if opt.name not in given and getattr(args, opt.name, None) is not None:
-                logger.warning("%s does not apply to --mode %s; ignored", opt.flags[-1], mode)
+                message = f"{opt.flags[-1]} does not apply to --mode {mode}; ignored"
+                logger.warning("%s", message)
+                if console is not None:
+                    console.warning(message)
     settings = defaults | given
     if args.precise:
         settings["sampling"] = "precise"
     return cls(**settings)
 
 
-def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
+def run_single(args: argparse.Namespace, console: Console, mode: Mode, options: Options) -> int:
     video = args.video
     target = args.output or default_output(video, mode)
     run = RunOptions(overwrite=not args.skip_existing)
     task, state = TASKS[mode], State(APP_NAME)
     planned = plan(task, [video], options, run, outputs=[target], speed=state.speed(task.name))
     if args.dry_run:
-        print_plan(planned)
+        print_plan(console, planned, WORDING, items=True)
         return EXIT_OK
     if not planned.pending:
-        print(f"Skipped: {target} already exists (use --overwrite to replace it)")
+        console.info(f"Skipped: {target} already exists (use --overwrite to replace it)")
         return EXIT_OK
-    report = execute(planned)
+    with RunProgress(console, planned, WORDING) as progress:
+        report = execute(planned, on_event=progress.on_event)
     state.learn_speed(task.name, report.measured_speed())
     (result,) = report.items
     if result.status is Status.CANCELLED:
         raise KeyboardInterrupt
     if result.status is Status.FAILED:
-        print(f"Error: {result.error}", file=sys.stderr)
-        print_hint(result.hint, args.log_file)
+        console.error(str(result.error))
+        console.hint(result.hint, args.log_file)
         return EXIT_FAILED
     noun = "Contact sheet" if mode is Mode.SHEET else "Snapshots"
-    print(f"{noun} saved to {result.output}")
+    console.info(f"{noun} saved to {result.output}", "ok")
     for problem in result.problems:
-        print(f"Warning: incomplete output: {problem}", file=sys.stderr)
+        console.warning(f"incomplete output: {problem}")
     return report.exit_status(strict=args.strict)
 
 
-def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Values) -> int:
+def run_batch(
+    args: argparse.Namespace, console: Console, mode: Mode, options: Options, values: Values
+) -> int:
     settings = values.get(RUN_SECTION, {}) | given_values(RunOptions, args)
     settings.pop("output", None)  # -o is not a config option; it is read below
     run = RunOptions(output=args.output, overwrite=not args.skip_existing, **settings)
     videos = find_videos(args.folder, recursive=run.recursive)
     if not videos:
-        print(f"No videos found in {args.folder}")
+        console.info(f"No videos found in {args.folder}")
         return EXIT_OK
     task, state = TASKS[mode], State(APP_NAME)
     planned = plan(task, videos, options, run, source=args.folder, speed=state.speed(task.name))
+    print_plan(console, planned, WORDING, items=args.dry_run)
     if args.dry_run:
-        print_plan(planned)
         return EXIT_OK
-    for line in planned.summary(redo_hint=REDO_HINT):
-        print(line)
 
-    def progress(done: int, total: int, result: ItemResult) -> None:
-        status = result.status.value if result.status is Status.OK else result.status.upper()
-        print(f"[{done}/{total}] {result.video.name}: {status}")
-
-    report = execute(planned, on_progress=progress, on_event=log_event)
+    with RunProgress(console, planned, WORDING) as progress:
+        report = execute(planned, on_progress=progress.on_progress, on_event=progress.on_event)
     state.learn_speed(task.name, report.measured_speed())
-    failed = report.failed
-    skipped = report.count(Status.SKIPPED)
-    degraded = report.degraded
-    summary = f"Done: {report.count(Status.OK)} succeeded"
-    if degraded:
-        summary += f", {len(degraded)} incomplete"
-    summary += f", {len(failed)} failed"
-    if skipped:
-        summary += f", {skipped} skipped (output already exists)"
-    if unfinished := report.unfinished:
-        summary += f", {len(unfinished)} not finished"
-    print(summary + ".")
-    for result in degraded:
-        print(f"  - {result.video.name}: incomplete: {'; '.join(result.problems)}", file=sys.stderr)
-    for result in failed:
-        print(f"  - {result.video.name}: {result.error}", file=sys.stderr)
-        if result.hint:
-            print(f"    Hint: {result.hint}", file=sys.stderr)
-    if failed:
-        print(f"Details: {args.log_file}", file=sys.stderr)
-    if report.interrupted:
-        print("Interrupted; unfinished files were removed.", file=sys.stderr)
+    print_report(console, report, WORDING, log_file=args.log_file)
     title = f"{APP_NAME} --folder {args.folder} --mode {mode}"
-    lists = write_run_lists(report, default_runs_dir(APP_NAME), title=title)
-    if lists.failed:
-        print(f"Videos to retry are listed in {lists.failed}")
-    if lists.pending:
-        print(
-            f"Unfinished videos are listed in {lists.pending}; to resume, run the same "
-            "command with --skip-existing"
-        )
+    resume = "run the same command with --skip-existing"
+    report_run_lists(console, report, APP_NAME, title=title, resume=resume)
     return report.exit_status(strict=args.strict)
-
-
-def log_event(event: ProgressEvent) -> None:
-    """Progress inside each video, for -v."""
-    if event.kind == "stage" and event.total:
-        logger.debug("%s: %s %d/%d", event.item.name, event.stage, event.done, event.total)
-
-
-def print_plan(planned: Plan) -> None:
-    for line in [*planned.summary(redo_hint=REDO_HINT), *planned.item_lines()]:
-        print(line)
