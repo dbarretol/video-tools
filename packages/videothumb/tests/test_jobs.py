@@ -15,18 +15,18 @@ SNAPSHOTS = SnapshotOptions(count=3)
 def test_default_and_batch_outputs():
     video = Path("videos/movie.mp4")
     assert default_output(video, Mode.SHEET) == Path("videos/movie_sheet.jpg")
-    assert default_output(video, Mode.SNAPSHOTS) == Path("videos/movie")
+    assert default_output(video, Mode.FRAMES) == Path("videos/movie_frames")
     assert batch_output(video, Mode.SHEET, None) == Path("videos/movie_sheet.jpg")
     assert batch_output(video, Mode.SHEET, Path("out")) == Path("out/movie_sheet.jpg")
-    assert batch_output(video, Mode.SNAPSHOTS, Path("out")) == Path("out/movie")
+    assert batch_output(video, Mode.FRAMES, Path("out")) == Path("out/movie_frames")
 
 
 def test_process_uses_default_output_next_to_the_video(clip, tmp_path):
     video = tmp_path / "movie.mp4"
     video.write_bytes(clip.read_bytes())
     assert process(video, Mode.SHEET, SHEET) == tmp_path / "movie_sheet.jpg"
-    assert process(video, Mode.SNAPSHOTS, SNAPSHOTS) == tmp_path / "movie"
-    assert len(list((tmp_path / "movie").glob("*.jpg"))) == 3
+    assert process(video, Mode.FRAMES, SNAPSHOTS) == tmp_path / "movie_frames"
+    assert len(list((tmp_path / "movie_frames").glob("movie_f*.jpg"))) == 3
 
 
 @pytest.mark.parametrize("workers", [1, 2])
@@ -46,7 +46,7 @@ def test_process_folder_isolates_failures(folder, tmp_path, workers):
     ("mode", "outputs"),
     [
         (Mode.SHEET, ["clip.mkv_sheet.jpg", "clip.mp4_sheet.jpg"]),
-        (Mode.SNAPSHOTS, ["clip.mkv_snapshots", "clip.mp4_snapshots"]),
+        (Mode.FRAMES, ["clip.mkv_frames", "clip.mp4_frames"]),
     ],
 )
 def test_videos_sharing_a_stem_do_not_overwrite_each_other(clip, tmp_path, mode, outputs):
@@ -76,13 +76,13 @@ def test_recursive_batch_recreates_subfolders_in_the_output(clip, tmp_path):
     assert all(r.value.is_file() for r in results)
 
 
-@pytest.mark.parametrize("mode", [Mode.SHEET, Mode.SNAPSHOTS])
+@pytest.mark.parametrize("mode", [Mode.SHEET, Mode.FRAMES])
 def test_cancelled_batch_removes_part_files(folder, mode):
     if mode is Mode.SHEET:
         leftover = folder / "a_sheet.jpg.part"
     else:
-        (folder / "a").mkdir()
-        leftover = folder / "a" / "snapshot_002.jpg.part"
+        (folder / "a_frames").mkdir()
+        leftover = folder / "a_frames" / "a_f002_00h00m01s.jpg.part"
     leftover.write_bytes(b"killed worker")
     options = SHEET if mode is Mode.SHEET else SNAPSHOTS
 
@@ -95,20 +95,27 @@ def test_outputs_have_no_part_files_left(clip, tmp_path):
     video = tmp_path / "movie.mp4"
     video.write_bytes(clip.read_bytes())
     process(video, Mode.SHEET, SHEET)
-    process(video, Mode.SNAPSHOTS, SNAPSHOTS)
+    process(video, Mode.FRAMES, SNAPSHOTS)
     assert not list(tmp_path.rglob("*.part"))
 
 
+def test_old_mode_name_still_reads():
+    assert Mode("snapshots") is Mode.FRAMES is Mode.SNAPSHOTS
+    assert [mode.value for mode in Mode] == ["sheet", "frames"]
+
+
 def test_has_output(tmp_path):
-    sheet, snaps = tmp_path / "a_sheet.jpg", tmp_path / "a"
+    sheet, snaps = tmp_path / "a_sheet.jpg", tmp_path / "a_frames"
     assert not has_output(sheet, Mode.SHEET)
     sheet.write_bytes(b"x")
     assert has_output(sheet, Mode.SHEET)
 
     snaps.mkdir()
-    assert not has_output(snaps, Mode.SNAPSHOTS)  # an empty folder does not count
-    (snaps / "snapshot_001.jpg").write_bytes(b"x")
-    assert has_output(snaps, Mode.SNAPSHOTS)
+    assert not has_output(snaps, Mode.FRAMES)  # an empty folder does not count
+    (snaps / "notes.jpg").write_bytes(b"x")
+    assert not has_output(snaps, Mode.FRAMES)  # not a frame
+    (snaps / "a_f001_00h00m00s.jpg").write_bytes(b"x")
+    assert has_output(snaps, Mode.FRAMES)
 
 
 def test_skipped_videos_keep_their_place_in_the_results(folder):
@@ -122,6 +129,6 @@ def test_skipped_videos_keep_their_place_in_the_results(folder):
 
 def test_process_folder_can_be_cancelled(folder):
     results = process_folder(
-        find_videos(folder), Mode.SNAPSHOTS, SNAPSHOTS, workers=1, should_cancel=lambda: True
+        find_videos(folder), Mode.FRAMES, SNAPSHOTS, workers=1, should_cancel=lambda: True
     )
     assert results == []

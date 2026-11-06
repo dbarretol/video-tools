@@ -5,20 +5,20 @@ import pytest
 from videothumb import cli
 
 
-def test_without_arguments_opens_the_gui(monkeypatch):
+def test_without_arguments_shows_the_help_and_gui_opens_the_app(monkeypatch, capsys):
     launched = []
     monkeypatch.setattr("videothumb.gui.app.launch", lambda: launched.append(True))
     assert cli.main([]) == 0
+    assert "sheet" in capsys.readouterr().out and launched == []
+    assert cli.main(["gui"]) == 0
     assert launched == [True]
 
 
 def test_sheet_for_one_video(clip, tmp_path, capsys):
     out = tmp_path / "sheet.jpg"
     args = [
-        "--video",
-        str(clip),
-        "--mode",
         "sheet",
+        str(clip),
         "--columns",
         "2",
         "--rows",
@@ -31,13 +31,11 @@ def test_sheet_for_one_video(clip, tmp_path, capsys):
     assert "Contact sheet saved" in capsys.readouterr().out
 
 
-def test_snapshots_for_one_video(clip, tmp_path):
-    out = tmp_path / "snaps"
+def test_frames_for_one_video(clip, tmp_path):
+    out = tmp_path / "frames"
     args = [
-        "--video",
+        "frames",
         str(clip),
-        "--mode",
-        "snapshots",
         "--count",
         "4",
         "--precise",
@@ -45,16 +43,14 @@ def test_snapshots_for_one_video(clip, tmp_path):
         str(out),
     ]
     assert cli.main(args) == 0
-    assert len(list(out.glob("snapshot_*.jpg"))) == 4
+    assert len(list(out.glob("clip_f00[1-4]_00h00m0[0-9]s.jpg"))) == 4
 
 
 def test_folder_reports_failures(folder, tmp_path, capsys):
     out = tmp_path / "out"
     args = [
-        "--folder",
+        "frames",
         str(folder),
-        "--mode",
-        "snapshots",
         "--count",
         "2",
         "-w",
@@ -66,28 +62,28 @@ def test_folder_reports_failures(folder, tmp_path, capsys):
     captured = capsys.readouterr()
     assert "Done: 2 succeeded, 1 failed." in captured.out
     assert "broken.mp4" in captured.err
-    assert (out / "a").is_dir() and (out / "b").is_dir()
+    assert (out / "a_frames").is_dir() and (out / "b_frames").is_dir()
 
 
 def test_empty_folder(tmp_path, capsys):
-    assert cli.main(["--folder", str(tmp_path), "--mode", "sheet"]) == 0
+    assert cli.main(["sheet", str(tmp_path)]) == 0
     assert "No videos found" in capsys.readouterr().out
 
 
 def test_missing_video_is_a_usage_error(tmp_path, capsys):
-    assert cli.main(["--video", str(tmp_path / "missing.mp4"), "--mode", "sheet"]) == 2
-    assert "Video not found" in capsys.readouterr().err
+    assert cli.main(["sheet", str(tmp_path / "missing.mp4")]) == 2
+    assert "Not found" in capsys.readouterr().err
 
 
 def test_missing_folder_is_a_usage_error(tmp_path, capsys):
-    assert cli.main(["--folder", str(tmp_path / "missing"), "--mode", "sheet"]) == 2
-    assert "Folder not found" in capsys.readouterr().err
+    assert cli.main(["sheet", str(tmp_path / "missing")]) == 2
+    assert "Not found" in capsys.readouterr().err
 
 
 def test_broken_video_fails(tmp_path, capsys):
     broken = tmp_path / "broken.mp4"
     broken.write_bytes(b"not a video")
-    assert cli.main(["--video", str(broken), "--mode", "sheet"]) == 1
+    assert cli.main(["sheet", str(broken)]) == 1
 
 
 @pytest.mark.parametrize(
@@ -103,14 +99,14 @@ def test_broken_video_fails(tmp_path, capsys):
 )
 def test_invalid_option_values_are_rejected(clip, capsys, option, value):
     with pytest.raises(SystemExit) as exc:
-        cli.main(["--video", str(clip), "--mode", "sheet", option, value])
+        cli.main(["sheet", str(clip), option, value])
     assert exc.value.code == 2
     assert option in capsys.readouterr().err
 
 
 def test_skip_existing_leaves_outputs_alone(folder, capsys):
     (folder / "a_sheet.jpg").write_bytes(b"from an earlier run")
-    args = ["--folder", str(folder), "--mode", "sheet", "-w", "1", "--skip-existing"]
+    args = ["sheet", str(folder), "-w", "1", "--skip-existing"]
 
     assert cli.main(args) == 1  # broken.mp4 still fails
     assert "1 succeeded, 1 skipped (output already exists), 1 failed." in capsys.readouterr().out
@@ -121,10 +117,10 @@ def test_skip_existing_leaves_outputs_alone(folder, capsys):
 def test_outputs_are_overwritten_by_default(clip, tmp_path, capsys):
     out = tmp_path / "sheet.jpg"
     out.write_bytes(b"from an earlier run")
-    assert cli.main(["--video", str(clip), "--mode", "sheet", "-o", str(out)]) == 0
+    assert cli.main(["sheet", str(clip), "-o", str(out)]) == 0
     assert out.read_bytes() != b"from an earlier run"
 
-    args = ["--video", str(clip), "--mode", "sheet", "-o", str(out), "--skip-existing"]
+    args = ["sheet", str(clip), "-o", str(out), "--skip-existing"]
     before = out.read_bytes()
     assert cli.main(args) == 0
     assert "Skipped" in capsys.readouterr().out
@@ -133,7 +129,7 @@ def test_outputs_are_overwritten_by_default(clip, tmp_path, capsys):
 
 def test_overwrite_and_skip_existing_are_exclusive(clip):
     with pytest.raises(SystemExit) as exc:
-        cli.main(["--video", str(clip), "--mode", "sheet", "--overwrite", "--skip-existing"])
+        cli.main(["sheet", str(clip), "--overwrite", "--skip-existing"])
     assert exc.value.code == 2
 
 
@@ -142,38 +138,61 @@ def test_ctrl_c_exits_with_130(clip, monkeypatch, capsys):
         raise KeyboardInterrupt
 
     monkeypatch.setattr("videothumb.jobs.make_sheet", interrupted)
-    assert cli.main(["--video", str(clip), "--mode", "sheet"]) == 130
+    assert cli.main(["sheet", str(clip)]) == 130
     assert "Interrupted" in capsys.readouterr().err
 
 
-def test_mode_is_required(clip):
+def test_a_command_is_required(clip):
     with pytest.raises(SystemExit) as exc:
-        cli.main(["--video", str(clip)])
+        cli.main([str(clip)])
     assert exc.value.code == 2
 
 
-def test_flags_of_the_other_mode_are_reported(clip, tmp_path, caplog):
-    out = tmp_path / "sheet.jpg"
-    args = ["--video", str(clip), "--mode", "sheet", "--count", "3", "-o", str(out)]
+def test_each_command_only_takes_its_own_options(clip, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["sheet", str(clip), "--count", "3"])
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --count" in capsys.readouterr().err
+
+
+def test_inputs_and_lists(folder, tmp_path, capsys):
+    listing = tmp_path / "list.txt"
+    listing.write_text(f"{folder / 'b.mkv'}\ngone.mp4\n", encoding="utf-8")
+    args = ["sheet", str(folder / "a.*"), "--input-list", str(listing), "--dry-run"]
     assert cli.main(args) == 0
-    assert "--count does not apply to --mode sheet; ignored" in caplog.text
+    out = capsys.readouterr().out
+    assert "3 videos: 2 to process, 1 not found" in out
+
+
+def test_old_command_lines_still_work_with_a_warning(clip, folder, tmp_path, capsys):
+    out = tmp_path / "s.jpg"
+    assert cli.main(["--video", str(clip), "--mode", "sheet", "-o", str(out)]) == 0
+    err = capsys.readouterr().err
+    assert "--mode, --video and --folder are deprecated" in err
+    assert f"use: videothumb sheet {clip} -o {out}" in err
+    assert out.is_file()
+
+    assert cli.main(["--folder", str(folder), "--mode=snapshots", "--count", "2", "-w", "1"]) == 1
+    assert "use: videothumb frames" in capsys.readouterr().err
+    assert (folder / "a_frames").is_dir()
+
+    assert cli.main(["snapshots", str(clip), "-o", str(tmp_path / "f"), "--count", "1"]) == 0
+    assert "`videothumb snapshots` is now `videothumb frames`" in capsys.readouterr().err
 
 
 def test_options_share_one_declaration():
     from videothumb.sheet import SheetOptions
     from videothumb.snapshots import SnapshotOptions
 
-    args = cli.build_parser().parse_args(["--video", "x", "--mode", "snapshots", "--quality", "70"])
-    options = cli.build_options(args)
-    assert options == SnapshotOptions(jpeg_quality=70)
-    assert cli.build_options(
-        cli.build_parser().parse_args(["--video", "x", "--mode", "sheet"])
-    ) == (SheetOptions())
+    args = cli.build_parser().parse_args(["frames", "x", "--quality", "70"])
+    assert cli.build_options(args) == SnapshotOptions(jpeg_quality=70)
+    args = cli.build_parser().parse_args(["sheet", "x", "--quality", "70"])
+    assert cli.build_options(args) == SheetOptions(jpeg_quality=70)
 
 
 def test_dry_run_lists_what_would_happen(folder, capsys):
     (folder / "a_sheet.jpg").write_bytes(b"from an earlier run")
-    args = ["--folder", str(folder), "--mode", "sheet", "--skip-existing", "--dry-run"]
+    args = ["sheet", str(folder), "--skip-existing", "--dry-run"]
     assert cli.main(args) == 0
     out = capsys.readouterr().out
     assert "3 videos: 2 to process, 1 already done" in out
@@ -182,7 +201,7 @@ def test_dry_run_lists_what_would_happen(folder, capsys):
 
 
 def test_batch_prints_the_plan_first(folder, capsys):
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
+    assert cli.main(["sheet", str(folder), "-w", "1"]) == 1
     out = capsys.readouterr().out
     assert out.index("3 videos: 3 to process") < out.index("[1/3]")
 
@@ -201,7 +220,7 @@ def lose_frames(monkeypatch, keep):
 
 def test_incomplete_sheet_is_degraded_and_exits_with_3(clip, tmp_path, monkeypatch, capsys):
     lose_frames(monkeypatch, keep=10)
-    args = ["--video", str(clip), "--mode", "sheet", "-o", str(tmp_path / "s.jpg")]
+    args = ["sheet", str(clip), "-o", str(tmp_path / "s.jpg")]
     assert cli.main(args) == 3
     err = capsys.readouterr().err
     assert "incomplete output: contact sheet: only 10/20 frames could be decoded" in err
@@ -211,7 +230,7 @@ def test_incomplete_sheet_is_degraded_and_exits_with_3(clip, tmp_path, monkeypat
 def test_batch_reports_incomplete_outputs(folder, monkeypatch, capsys):
     lose_frames(monkeypatch, keep=1)
     (folder / "broken.mp4").unlink()
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 3
+    assert cli.main(["sheet", str(folder), "-w", "1"]) == 3
     captured = capsys.readouterr()
     assert "a.mp4: DEGRADED" in captured.out
     assert "Done: 0 succeeded, 2 incomplete, 0 failed." in captured.out
@@ -232,12 +251,15 @@ def test_sheet_of_the_wrong_size_fails(clip, tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("mode", "function"), [("sheet", "sample_frames"), ("snapshots", "iter_frames")]
+    ("mode", "module", "function"),
+    [("sheet", "sheet", "sample_frames"), ("frames", "snapshots", "iter_frames")],
 )
-def test_keyframe_sampling_falls_back_to_precise(clip, tmp_path, monkeypatch, mode, function):
+def test_keyframe_sampling_falls_back_to_precise(
+    clip, tmp_path, monkeypatch, mode, module, function
+):
     import importlib
 
-    module = importlib.import_module(f"videothumb.{mode}")
+    module = importlib.import_module(f"videothumb.{module}")
     real, calls = getattr(module, function), []
 
     def spy(*args, **kwargs):
@@ -245,18 +267,18 @@ def test_keyframe_sampling_falls_back_to_precise(clip, tmp_path, monkeypatch, mo
         return real(*args, **kwargs)
 
     monkeypatch.setattr(module, function, spy)
-    assert cli.main(["--video", str(clip), "--mode", mode, "-o", str(tmp_path / "out")]) == 0
+    assert cli.main([mode, str(clip), "-o", str(tmp_path / "out")]) == 0
     assert calls[0]["fallback"] is True and calls[0]["mode"] == "keyframe"
 
 
 def test_failures_come_with_a_hint_and_the_log_path(folder, tmp_path, capsys):
     broken = folder / "broken.mp4"
-    assert cli.main(["--video", str(broken), "--mode", "sheet"]) == 1
+    assert cli.main(["sheet", str(broken)]) == 1
     err = capsys.readouterr().err
     assert "Hint: the file may be damaged" in err
     assert "Details: " in err and "videothumb" in err
 
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
+    assert cli.main(["sheet", str(folder), "-w", "1"]) == 1
     err = capsys.readouterr().err
     assert "  - broken.mp4: VideoOpenError" in err
     assert "    Hint: the file may be damaged" in err
@@ -276,7 +298,7 @@ def test_interrupted_batch_lists_what_is_left(folder, monkeypatch, capsys):
         return real(video, *args, **kwargs)
 
     monkeypatch.setattr(jobs, "make_sheet", stop_at_b)
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 130
+    assert cli.main(["sheet", str(folder), "-w", "1"]) == 130
     captured = capsys.readouterr()
     assert "Interrupted" in captured.err
     assert "with --skip-existing" in captured.out
@@ -290,14 +312,14 @@ def test_interrupted_batch_lists_what_is_left(folder, monkeypatch, capsys):
 def test_failed_batch_lists_the_videos_to_retry(folder, capsys):
     from videocore import default_runs_dir
 
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1"]) == 1
+    assert cli.main(["sheet", str(folder), "-w", "1"]) == 1
     assert "Videos to retry are listed in" in capsys.readouterr().out
     (failed,) = default_runs_dir("videothumb").glob("*_sheet_failed.txt")
     assert str((folder / "broken.mp4").resolve()) in failed.read_text(encoding="utf-8-sig")
 
 
 def test_quiet_leaves_only_what_needs_attention(folder, capsys):
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1", "-q"]) == 1
+    assert cli.main(["sheet", str(folder), "-w", "1", "-q"]) == 1
     captured = capsys.readouterr()
     assert "to process" not in captured.out and "Done:" not in captured.out
     assert "[1/3]" not in captured.out
@@ -305,7 +327,7 @@ def test_quiet_leaves_only_what_needs_attention(folder, capsys):
     assert "  - broken.mp4: VideoOpenError" in captured.err
 
     (folder / "broken.mp4").unlink()
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1", "-q"]) == 0
+    assert cli.main(["sheet", str(folder), "-w", "1", "-q"]) == 0
     assert capsys.readouterr() == ("", "")
 
 
@@ -314,7 +336,7 @@ def test_names_with_brackets_are_printed_as_they_are(clip, tmp_path, capsys):
 
     video = tmp_path / "clip [1080p] [bold]x.mp4"
     shutil.copy(clip, video)
-    assert cli.main(["--video", str(video), "--mode", "sheet"]) == 0
+    assert cli.main(["sheet", str(video)]) == 0
     assert "clip [1080p] [bold]x_sheet.jpg" in capsys.readouterr().out
 
 
@@ -322,12 +344,12 @@ def test_json_puts_one_document_on_stdout(folder, capsys):
     import json
 
     (folder / "a_sheet.jpg").write_bytes(b"from an earlier run")
-    args = ["--folder", str(folder), "--mode", "sheet", "-w", "1", "--skip-existing", "--json"]
+    args = ["sheet", str(folder), "-w", "1", "--skip-existing", "--json"]
     assert cli.main(args) == 1
     captured = capsys.readouterr()
     document = json.loads(captured.out)
     assert document["schema"] == 1 and document["tool"] == "videothumb"
-    assert document["mode"] == "sheet" and document["exit_code"] == 1
+    assert document["command"] == "sheet" and document["exit_code"] == 1
     assert document["plan"]["counts"] == {"pending": 2, "skipped": 1, "outdated": 0}
     items = document["report"]["items"]
     statuses = {Path(item["video"]).name: item["status"] for item in items}
@@ -342,16 +364,16 @@ def test_json_puts_one_document_on_stdout(folder, capsys):
 def test_json_dry_run_and_errors(folder, tmp_path, capsys):
     import json
 
-    assert cli.main(["--folder", str(folder), "--mode", "sheet", "--dry-run", "--json"]) == 0
+    assert cli.main(["sheet", str(folder), "--dry-run", "--json"]) == 0
     document = json.loads(capsys.readouterr().out)
     assert [item["state"] for item in document["plan"]["items"]] == ["pending"] * 3
     assert "report" not in document
 
     missing = str(tmp_path / "missing.mp4")
-    assert cli.main(["--video", missing, "--mode", "sheet", "--json"]) == 2
+    assert cli.main(["sheet", missing, "--json"]) == 2
     document = json.loads(capsys.readouterr().out)
     assert document["error"]["type"] == "UsageError"
-    assert document["error"]["message"].startswith("Video not found")
+    assert document["error"]["message"].startswith("Not found")
     assert document["exit_code"] == 2
 
 
@@ -359,14 +381,14 @@ def test_open_shows_the_output_folder(folder, tmp_path, monkeypatch):
     opened = []
     monkeypatch.setattr("videoconsole.desktop.open_folder", opened.append)
     out = tmp_path / "out"
-    args = ["--folder", str(folder), "--mode", "sheet", "-w", "1", "-o", str(out), "--open"]
+    args = ["sheet", str(folder), "-w", "1", "-o", str(out), "--open"]
     assert cli.main(args) == 1  # broken.mp4 fails, the others are there to look at
     assert opened == [out]
 
     sheet = tmp_path / "single" / "s.jpg"
     sheet.parent.mkdir()
     video = folder / "a.mp4"
-    assert cli.main(["--video", str(video), "--mode", "sheet", "-o", str(sheet), "--open"]) == 0
+    assert cli.main(["sheet", str(video), "-o", str(sheet), "--open"]) == 0
     assert opened == [out, sheet.parent]
 
 
@@ -378,7 +400,7 @@ def test_console_section_of_the_config(clip, tmp_path, monkeypatch):
     seen = []
     real = Desktop.configure
     monkeypatch.setattr(Desktop, "configure", lambda self, o: seen.append(o) or real(self, o))
-    args = ["--video", str(clip), "--mode", "sheet", "-o", str(tmp_path / "s.jpg")]
+    args = ["sheet", str(clip), "-o", str(tmp_path / "s.jpg")]
     assert cli.main([*args, "--config", str(config)]) == 0
     assert seen == [ConsoleOptions(notify_after=0, keep_awake=False)]
 
@@ -387,5 +409,5 @@ def test_invalid_arguments_pause_when_launched_alone(monkeypatch):
     paused = []
     monkeypatch.setattr(cli, "pause_if_alone", lambda: paused.append(True))
     with pytest.raises(SystemExit):
-        cli.main(["--mode", "sheet"])
+        cli.main(["sheet", "--bogus"])
     assert paused == [True]
