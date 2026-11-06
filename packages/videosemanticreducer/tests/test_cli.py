@@ -14,6 +14,23 @@ def test_without_arguments_prints_help(capsys):
     assert "archive" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    ("argv", "start"),
+    [
+        (["help"], "usage: videosemanticreducer [-h]"),
+        (["/?"], "usage: videosemanticreducer [-h]"),
+        (["-v", "help", "status"], "usage: videosemanticreducer status"),
+        (["help", "process"], "usage: videosemanticreducer archive"),
+        (["verify", "-?"], "usage: videosemanticreducer verify"),
+    ],
+)
+def test_help_in_other_words(argv, start, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.startswith(start)
+
+
 def test_process_single_video(clip, tmp_path):
     out = tmp_path / "out"
     assert main(["archive", str(clip), "-o", str(out), *FAST]) == 0

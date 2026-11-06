@@ -14,6 +14,33 @@ def test_without_arguments_shows_the_help_and_gui_opens_the_app(monkeypatch, cap
     assert launched == [True]
 
 
+@pytest.mark.parametrize("argv", [["help"], ["/?"], ["-?"], ["/help"]])
+def test_help_in_other_words(argv, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(argv)
+    assert exit_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "examples:" in out and "videothumb clip.mp4" in out
+
+
+@pytest.mark.parametrize(
+    ("argv", "usage"),
+    [
+        (["help", "frames"], "usage: videothumb frames"),
+        (["pack", "/?"], "usage: videothumb pack"),
+        (["help", "gui"], "usage: videothumb gui"),
+        (["gui", "--help"], "usage: videothumb gui"),
+        (["help", "config"], "usage: videothumb config"),
+    ],
+)
+def test_help_of_a_command(argv, usage, monkeypatch, capsys):
+    monkeypatch.setattr("videothumb.gui.app.launch", lambda: pytest.fail("the app opened"))
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(argv)
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.startswith(usage)
+
+
 def test_sheet_for_one_video(clip, tmp_path, capsys):
     out = tmp_path / "sheet.jpg"
     args = [

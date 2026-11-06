@@ -45,6 +45,19 @@ def test_help_and_version(calls, capsys):
     assert calls == []
 
 
+@pytest.mark.parametrize("argv", [["help"], ["/?"], ["-v", "-?"]])
+def test_help_in_other_words(calls, capsys, argv):
+    assert cli.main(argv) == 0
+    assert "examples:" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_help_of_a_command_goes_to_its_tool(calls):
+    assert cli.main(["help", "archive"]) == 0
+    assert cli.main(["help", "sheet"]) == 0
+    assert calls == [("vsr", ["archive", "--help"]), ("thumb", ["sheet", "--help"])]
+
+
 def test_config_needs_a_tool(calls, capsys):
     assert cli.main(["config", "show"]) == 2
     assert "vtools config {thumb,vsr}" in capsys.readouterr().err

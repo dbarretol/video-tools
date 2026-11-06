@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from videocore.commands import config_argument, configured, with_default_task
+from videocore.commands import (
+    config_argument,
+    configured,
+    help_epilog,
+    with_default_task,
+    with_help,
+)
 from videocore.config import AppConfig, Section
 from videocore.options import option
 
@@ -21,7 +27,7 @@ def unused():
         (["clip.mp4"], ["sheet", "clip.mp4"]),
         (["-o", "out", "clip.mp4"], ["sheet", "-o", "out", "clip.mp4"]),
         (["-v", "clip.mp4"], ["-v", "sheet", "clip.mp4"]),
-        ([".\sheet"], ["sheet", ".\sheet"]),
+        ([r".\sheet"], ["sheet", r".\sheet"]),
     ],
 )
 def test_the_default_task_goes_first(argv, expected):
@@ -33,6 +39,40 @@ def test_the_default_task_goes_first(argv, expected):
 )
 def test_commands_and_help_are_left_alone(argv):
     assert with_default_task(argv, ["sheet", "frames"], unused, global_flags=["-v"]) == argv
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["help"], ["--help"]),
+        (["/?"], ["--help"]),
+        (["-?"], ["--help"]),
+        (["/help"], ["--help"]),
+        (["help", "frames"], ["frames", "--help"]),
+        (["help", "nothing"], ["--help"]),
+        (["-v", "help", "sheet"], ["-v", "sheet", "--help"]),
+        (["sheet", "/?"], ["sheet", "--help"]),
+        (["sheet", "help"], ["sheet", "help"]),  # a file named help
+        (["clip.mp4"], ["clip.mp4"]),
+    ],
+)
+def test_other_ways_of_asking_for_help(argv, expected):
+    assert with_help(argv, ["sheet", "frames"], global_flags=["-v"]) == expected
+
+
+def test_help_epilog_aligns_and_wraps():
+    text = help_epilog(
+        [("tool a.mp4", "short"), ("tool b.mp4 " + "x" * 40, "below its command")],
+        "A note " * 20,
+    )
+    lines = text.splitlines()
+    assert lines[:4] == [
+        "examples:",
+        "  tool a.mp4  short",
+        "  tool b.mp4 " + "x" * 40,
+        "              below its command",
+    ]
+    assert lines[4] == "" and all(len(line) <= 79 for line in lines)
 
 
 def test_config_argument():
