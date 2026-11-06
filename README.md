@@ -5,7 +5,7 @@ Python tools for previewing and archiving video files, built on [PyAV](https://p
 
 | Tool | What it does |
 |---|---|
-| [**videothumb**](packages/videothumb) | Contact sheets (a grid of frames under the video's details) and folders of full-size frames, for any number of videos and folders. Desktop app and command line. |
+| [**videothumb**](packages/videothumb) | Contact sheets (a grid of frames under the video's details) and folders of full-size frames, apart or in one ZIP, for any number of videos and folders. Desktop app and command line. |
 | [**videosemanticreducer**](packages/videosemanticreducer) | Archives videos before you delete them: a short summary video, a contact sheet, a metadata report and a perceptual fingerprint that can later tell whether another file is the same video. Command line. |
 
 Both share [**videocore**](packages/videocore), a small library for probing videos, sampling frames,
@@ -45,6 +45,9 @@ uv run videosemanticreducer --help
 videothumb sheet movie.mp4
 videothumb frames ./videos --count 15
 
+# The sheet and its frames in one ZIP per video
+videothumb pack ./videos
+
 # Open the videothumb desktop app
 videothumb gui
 
@@ -82,7 +85,7 @@ console:
 
 ## Choosing the videos
 
-`videothumb sheet` and `frames`, and `videosemanticreducer archive`, `fingerprint` and `status`
+`videothumb sheet`, `frames` and `pack`, and `videosemanticreducer archive`, `fingerprint` and `status`
 take any number of `PATH` arguments:
 videos, folders (their videos; subfolders too with `-r`) and patterns such as `D:\Videos\*.mkv`,
 which are expanded by the tool because the Windows shell does not. A path that exists is used as
@@ -165,7 +168,7 @@ Folders are processed in parallel processes; one failing file never stops the re
 packages/
   videocore/              shared library (probe, frame sampling, grids, batch, logging)
   videoconsole/           terminal output of the command lines (rich): progress and reports
-  videothumb/             contact sheets and frames: CLI + tkinter desktop app
+  videothumb/             contact sheets, frames and packs: CLI + tkinter desktop app
   videosemanticreducer/   archive pipeline, fingerprints, compare/verify
 benchmarks/               timing harness (bench.py) and drivers for the tools
 ```

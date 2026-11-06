@@ -9,6 +9,8 @@ command.
 
 - Commands: `videothumb sheet PATH...` and `videothumb frames PATH...` replace
   `--video`/`--folder` with `--mode sheet|snapshots`. Each command only accepts its own options.
+- New `videothumb pack PATH...`: one ZIP per video, `<name>_pack.zip`, with the contact sheet
+  and a `frames/` folder, decoding the video once.
 - `videothumb` without arguments shows the help; the desktop app opens with `videothumb gui`.
 - "Snapshots" are now "frames": the folder is `<name>_frames/` instead of `<name>/`, and each
   file is named after the video and its time, `<name>_f001_00h12m34s.jpg`, instead of

@@ -1,7 +1,7 @@
 # videothumb
 
-Generate contact sheets (a grid of frames under the video's details) and folders of full-size
-frames from videos, on the command line or in a desktop app.
+Generate contact sheets (a grid of frames under the video's details), folders of full-size
+frames, or both in one ZIP, on the command line or in a desktop app.
 
 ## Usage
 
@@ -12,6 +12,9 @@ videothumb sheet movie.mp4 --columns 5 --rows 4
 # 15 frames of one video (default: a movie_frames folder next to it)
 videothumb frames movie.mp4 --count 15
 
+# The sheet and its 20 frames in one ZIP (default: movie_pack.zip next to it)
+videothumb pack movie.mp4
+
 # Every video in two folders and a list, outputs collected in one place
 videothumb sheet ./videos ./more/*.mkv --input-list extra.txt -o ./sheets --workers 2
 
@@ -19,27 +22,28 @@ videothumb sheet ./videos ./more/*.mkv --input-list extra.txt -o ./sheets --work
 videothumb gui
 ```
 
-`videothumb` without arguments shows the commands. `sheet` and `frames` take any number of videos,
+`videothumb` without arguments shows the commands. `sheet`, `frames` and `pack` take any number of videos,
 folders and patterns, and `--input-list FILE` (see the
 [main README](../../README.md#choosing-the-videos)).
 
 | Option | Description | Default |
 |---|---|---|
 | `PATH...`, `--input-list FILE` | Videos, folders (`-r` for subfolders), patterns, lists of paths | at least one |
-| `-o`, `--output` | For one video: the sheet file or frames folder. Otherwise a folder for every output, recreating subfolders with `-r` | next to each video |
-| `--columns`, `--rows` (`sheet`) | Contact sheet grid | `5`, `4` |
-| `--thumbnail-width` (`sheet`) | Thumbnail width in pixels | `320` |
-| `--count` (`frames`) | Number of frames | `10` |
+| `-o`, `--output` | For one video: the sheet file, frames folder or ZIP. Otherwise a folder for every output, recreating subfolders with `-r` | next to each video |
+| `--columns`, `--rows` (`sheet`, `pack`) | Contact sheet grid | `5`, `4` |
+| `--thumbnail-width` (`sheet`, `pack`) | Thumbnail width in pixels | `320` |
+| `--count` (`frames`, `pack`) | Number of frames | `10`; with `pack`, one per cell of the sheet |
 | `--quality` | JPEG quality (1-100) | `90` |
 | `--precise` | Take frames at exact positions (slower) | off |
 | `-w`, `--workers` | Videos processed in parallel | automatic |
 | `--config FILE` | Defaults file to use (see below) | see below |
-| `--overwrite` / `--skip-existing` | Replace existing outputs, or leave videos whose sheet or frames folder already exists | `--overwrite` |
+| `--overwrite` / `--skip-existing` | Replace existing outputs, or leave videos whose sheet, frames folder or ZIP already exists | `--overwrite` |
 | `--dry-run` | Show what would be done for each video, without processing anything | off |
 | `--strict` | Treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1) | off |
 | `-q`, `--quiet` | Only show warnings, errors and what to do about them | off |
 | `-v`, `--verbose` | Also show debug messages (they always go to the log file) | off |
 | `--open` | Open the output folder when done | off |
+| `--no-progress` | No live progress bar; one line per video instead | off |
 | `--json` | Write the plan and the results to stdout as one JSON document (messages go to stderr); see the [main README](../../README.md) | off |
 
 With several videos, a plan is printed first: videos to process and already done, the length of
@@ -53,6 +57,12 @@ command exits with 3.
 
 Frames are named after the video and the moment they show, so they can be moved or mixed with
 others: `movie_f001_00h12m34s.jpg` is the first frame of `movie.mp4`, at 12 minutes 34 seconds.
+
+`pack` writes `movie_pack.zip` with `movie_sheet.jpg` and a `frames/` folder, which Windows opens
+like any folder. By default each frame is the full-size version of one cell of the sheet, so the
+video is decoded only once; `--count` with another number decodes it a second time for the sheet.
+The JPEGs are stored as they are, without compressing them again, and frames from several ZIPs
+extracted into one folder do not overwrite each other.
 
 The form of earlier versions, `--video`/`--folder` with `--mode sheet|snapshots`, and the
 `snapshots` command still work, with a warning that shows the new command; they will be removed.
@@ -69,7 +79,7 @@ same name, such as `clip.mp4` and `clip.mkv`, their outputs include the extensio
 
 ## Default settings
 
-The defaults of the command line can be kept in a YAML file, with one section per command (`sheet`, `frames`), a
+The defaults of the command line can be kept in a YAML file, with one section per command (`sheet`, `frames`, `pack`), a
 `run` section for folders and a `console` section (notifications, sleep, the pause when started
 from the Explorer; see the [main README](../../README.md)). Flags given on the command line still
 take precedence. The desktop app does not read this file.
