@@ -382,7 +382,12 @@ def _snapshots_and_thumbs(
     if not options.summary:
         timestamps = snapshot_timestamps(info.duration, cells)
         return sample_frames(
-            info.path, timestamps, size=thumb_size, workers=decoders, stage="thumbnail"
+            info.path,
+            timestamps,
+            size=thumb_size,
+            workers=decoders,
+            stage="thumbnail",
+            fallback=True,
         )
 
     snap_size = even_size(info.video.width, info.video.height, SNAPSHOT_MAX_SIDE)
@@ -399,7 +404,12 @@ def _snapshots_and_thumbs(
         # Frames arrive in order while the next ones are decoded, so encoding overlaps
         # decoding and only a few full-size frames are in memory at a time.
         frames = iter_frames(
-            info.path, timestamps, size=snap_size, workers=decoders, stage="snapshots"
+            info.path,
+            timestamps,
+            size=snap_size,
+            workers=decoders,
+            stage="snapshots",
+            fallback=True,
         )
         for index, image in frames:
             if image is None:
@@ -423,6 +433,7 @@ def _snapshots_and_thumbs(
             size=thumb_size,
             workers=decoders,
             stage="thumbnail",
+            fallback=True,
         )
     return thumbs
 
