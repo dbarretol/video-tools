@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from videocore import evenly_spaced, iter_frames, probe
 from videothumb.common import Sampling
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,4 +61,11 @@ def make_snapshots(
         saved.append(path)
     if not saved:
         raise RuntimeError(f"No frame could be decoded from {info.path}")
+    if len(saved) < options.count:
+        logger.warning(
+            "Saved %d/%d snapshots of %s; the other frames could not be decoded",
+            len(saved),
+            options.count,
+            info.path,
+        )
     return saved

@@ -5,6 +5,7 @@ Each thumbnail is labeled with the time of the frame it shows.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,8 @@ TEXT_COLOR = (255, 255, 255)
 TIMESTAMP_COLOR = (255, 255, 0)
 HEADER_HEIGHT = 80
 TITLE_SIZE, DETAILS_SIZE, LABEL_SIZE = 22, 15, 14
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -61,8 +64,16 @@ def make_sheet(video: str | Path, output: str | Path, options: SheetOptions | No
     frames = sample_frames(
         info.path, timestamps, mode=options.sampling, size=(width, height), workers=options.workers
     )
-    if all(frame is None for frame in frames):
+    decoded = sum(frame is not None for frame in frames)
+    if decoded == 0:
         raise RuntimeError(f"No frame could be decoded from {info.path}")
+    if decoded < len(frames):
+        logger.warning(
+            "Contact sheet of %s has %d/%d thumbnails; the rest are black",
+            info.path,
+            decoded,
+            len(frames),
+        )
 
     sheet = render_sheet(info, frames, timestamps, options.columns, (width, height))
     output = Path(output)
