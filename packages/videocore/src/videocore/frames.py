@@ -9,6 +9,11 @@ Two modes:
   timestamp. Slower (up to a GOP of decodes per sample) but independent of where
   the encoder placed keyframes, which matters for perceptual fingerprints.
 
+With ``fallback=True``, keyframe mode re-samples precisely the positions where
+it gave nothing or the same keyframe as the previous position (keyframes far
+apart, as in screen recordings), so every position shows a distinct frame
+while the rest keep the speed of keyframe seeking.
+
 ``draft=True`` trades image quality for speed: the decoder skips the deblocking
 filter and, in precise mode, frames no other frame depends on (most B-frames),
 so a frame may come from a frame or two away and look slightly blocky. On a
@@ -25,6 +30,7 @@ hand them over as soon as they are ready with a small reorder buffer.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from collections.abc import Iterator, Sequence
@@ -39,6 +45,8 @@ from videocore import progress
 from videocore.errors import VideoOpenError
 
 Mode = Literal["keyframe", "precise"]
+
+logger = logging.getLogger(__name__)
 
 MAX_KEYFRAME_WORKERS = 4
 # Frames each parallel container may decode ahead of the consumer.
@@ -71,6 +79,7 @@ def sample_frames(
     workers: int | None = None,
     draft: bool = False,
     stage: str | None = None,
+    fallback: bool = False,
 ) -> list[Image.Image | None]:
     """Decode one RGB frame per timestamp (seconds).
 
@@ -85,13 +94,24 @@ def sample_frames(
     defaults to up to 4 in keyframe mode and 1 in precise mode; pass 1 when the
     caller already processes several videos in parallel.
 
+    With `fallback` (keyframe mode only), positions where no frame could be
+    decoded or where the keyframe is the same as for the previous position are
+    decoded again in precise mode; those frames have ``image.info["resampled"]``.
+
     With `stage`, each decoded frame is reported as progress of that stage
     (see ``videocore.progress``). Decoding stops with ``progress.Cancelled``
     when the current run is cancelled.
     """
     results: list[Image.Image | None] = [None] * len(timestamps)
     frames = iter_frames(
-        path, timestamps, mode=mode, size=size, workers=workers, draft=draft, stage=stage
+        path,
+        timestamps,
+        mode=mode,
+        size=size,
+        workers=workers,
+        draft=draft,
+        stage=stage,
+        fallback=fallback,
     )
     for index, image in frames:
         results[index] = image
@@ -107,6 +127,7 @@ def iter_frames(
     workers: int | None = None,
     draft: bool = False,
     stage: str | None = None,
+    fallback: bool = False,
 ) -> Iterator[tuple[int, Image.Image | None]]:
     """Like `sample_frames`, but yield ``(index, frame)`` pairs in timestamp order.
 
@@ -123,7 +144,44 @@ def iter_frames(
     workers = max(1, min(workers, len(order)))
     job = _Job(os.fspath(path), timestamps, mode, size, draft)
     frames = job.decode(order) if workers == 1 else _decode_parallel(job, order, workers)
+    if fallback and mode == "keyframe":
+        frames = _with_fallback(frames, job)
     return frames if stage is None else _report(frames, stage, len(order))
+
+
+def _with_fallback(
+    frames: Iterator[tuple[int, Image.Image | None]], job: _Job
+) -> Iterator[tuple[int, Image.Image | None]]:
+    """Re-decode precisely the missing frames and the repeated keyframes of `frames`.
+
+    `frames` come in timestamp order, so a repeat is a keyframe whose time is the
+    same as the one of the previous position.
+    """
+    precise = _Job(job.path, job.timestamps, "precise", job.size, job.draft)
+    seeker: _Seeker | None = None
+    previous: float | None = None
+    resampled = 0
+    try:
+        with closing(frames):
+            for index, image in frames:
+                time = None if image is None else image.info.get("time")
+                repeated = time is not None and time == previous
+                if image is None or repeated:
+                    if seeker is None:
+                        seeker = precise.open()
+                    replacement = seeker.frame(index)
+                    if replacement is not None:
+                        replacement.info["resampled"] = True
+                        resampled += 1
+                        image = replacement
+                if time is not None:
+                    previous = time
+                yield index, image
+    finally:
+        if seeker is not None:
+            seeker.close()
+        if resampled:
+            logger.debug("Re-sampled %d frames of %s precisely", resampled, job.path)
 
 
 def _report(
@@ -165,27 +223,25 @@ class _Job:
         """Open one container and decode `indices` in the given order."""
         if not indices:
             return
+        seeker = self.open()
+        try:
+            for index in indices:
+                progress.check_cancelled()
+                yield index, seeker.frame(index)
+        finally:
+            seeker.close()
+
+    def open(self) -> _Seeker:
         try:
             container = av.open(self.path)
         except av.FFmpegError as exc:
             raise VideoOpenError(f"Could not open video: {self.path}") from exc
-
-        with container:
-            if not container.streams.video:
-                raise VideoOpenError(f"No video stream in {self.path}")
-            stream = container.streams.video[0]
-            self._configure(stream)
-            frame_period = 1 / float(stream.average_rate or stream.guessed_rate or 30)
-
-            for index in indices:
-                progress.check_cancelled()
-                ts = self.timestamps[index]
-                try:
-                    container.seek(int(max(ts, 0) / stream.time_base), stream=stream, backward=True)
-                    frame = self._decode_at(container, stream, ts, frame_period)
-                except av.FFmpegError:
-                    frame = None
-                yield index, (_to_image(frame, self.size) if frame is not None else None)
+        if not container.streams.video:
+            container.close()
+            raise VideoOpenError(f"No video stream in {self.path}")
+        stream = container.streams.video[0]
+        self._configure(stream)
+        return _Seeker(self, container, stream)
 
     def _configure(self, stream: av.VideoStream) -> None:
         ctx = stream.codec_context
@@ -218,6 +274,32 @@ class _Job:
             if frame.time >= ts - frame_period / 2:
                 return frame
         return last
+
+
+class _Seeker:
+    """An open container that decodes the frame of one timestamp at a time."""
+
+    def __init__(
+        self, job: _Job, container: av.container.InputContainer, stream: av.VideoStream
+    ) -> None:
+        self.job = job
+        self.container = container
+        self.stream = stream
+        self.frame_period = 1 / float(stream.average_rate or stream.guessed_rate or 30)
+
+    def frame(self, index: int) -> Image.Image | None:
+        ts = self.job.timestamps[index]
+        try:
+            self.container.seek(
+                int(max(ts, 0) / self.stream.time_base), stream=self.stream, backward=True
+            )
+            frame = self.job._decode_at(self.container, self.stream, ts, self.frame_period)
+        except av.FFmpegError:
+            return None
+        return _to_image(frame, self.job.size) if frame is not None else None
+
+    def close(self) -> None:
+        self.container.close()
 
 
 def _decode_parallel(
