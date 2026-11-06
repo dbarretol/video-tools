@@ -8,7 +8,8 @@ on its own and does not use it.
 - `Console`: where a command writes. Results go to stdout; warnings, errors, hints and the live
   progress go to stderr. Text is printed literally (file names such as `clip [1080p].mp4` are not
   read as rich markup) and long lines are not wrapped. `quiet` (`-q`) keeps only what needs
-  attention.
+  attention, and `progress=False` (`--no-progress`) leaves one line per video instead of the live
+  progress.
 - `setup_logging(app, console, verbose=)`: logs to the tool's file and, only with `verbose`
   (`-v`), to the console, above the progress bars.
 - `print_plan(console, plan, wording)`: the plan summary before a run, and with `items=True` one

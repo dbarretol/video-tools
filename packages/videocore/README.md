@@ -57,6 +57,14 @@ an output folder, and `Inputs.invalid` (listed paths that do not exist) goes to
 `plan(invalid=...)`, which plans them as FAILED. `add_input_arguments` adds `PATH...` and
 `--input-list` to an argparse parser.
 
+## Commands
+
+`videocore.commands.with_default_task(argv, commands, task)` puts the tool's default task in front
+of command lines that do not start with a command (`vthumb clip.mp4` runs `sheet`), skipping flags
+such as `-v` that may come first. `configured(config, argv, section, name)` reads one option from
+the config file before the command line is parsed (`--config` included), falling back to the
+built-in default when the file cannot be read.
+
 ## Jobs
 
 `videocore.jobs` is the contract between a tool and whatever runs it (a CLI today, a GUI later).
