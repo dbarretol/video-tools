@@ -18,6 +18,8 @@ from typing import Any
 
 import yaml
 
+from videocore import UsageError
+
 APP_NAME = "videosemanticreducer"
 CONFIG_ENV = "VIDEOSEMANTICREDUCER_CONFIG"
 SECTION = "process"
@@ -66,7 +68,7 @@ _TYPES: dict[str, tuple[type, ...]] = {
 }
 
 
-class ConfigError(ValueError):
+class ConfigError(UsageError):
     """The config file is missing, unreadable or has invalid values."""
 
 

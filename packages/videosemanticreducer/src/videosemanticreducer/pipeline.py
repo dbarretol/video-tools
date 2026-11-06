@@ -49,7 +49,9 @@ from videosemanticreducer.manifest import (
     MANIFEST_SUFFIX,
     Source,
     build_manifest,
+    is_complete,
     manifest_path,
+    read_manifest,
     write_manifest,
 )
 from videosemanticreducer.report import write_report
@@ -234,6 +236,7 @@ def process_batch(
     options: ProcessOptions | None = None,
     *,
     source: Path | None = None,
+    skip_complete: bool = False,
     workers: int | None = None,
     on_progress: Callable[[int, int, BatchResult], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -246,8 +249,24 @@ def process_batch(
     name instead (``clip.mp4_summary``). Successful results carry the folder as
     their value. Raises ``videocore.OutputCollisionError`` before processing
     anything if two videos would still write the same folder.
+
+    With `skip_complete`, videos already archived (see `archive_state`) are not
+    processed again; they are returned with ``skipped=True`` and the state as
+    their ``detail``. Progress is reported for the processed videos only.
     """
     slots = plan_outputs(videos, output=output, source=source)
+    states = [
+        archive_state(_slot_dir(slot), slot.name, options) if skip_complete else None
+        for slot in slots
+    ]
+    skipped = [
+        BatchResult(item=video, ok=True, value=_slot_dir(slot), skipped=True, detail=state)
+        for video, slot, state in zip(videos, slots, states, strict=True)
+        if state is not None
+    ]
+    if skipped:
+        logger.info("Skipping %d videos that are already archived", len(skipped))
+    todo = [i for i, state in enumerate(states) if state is None]
     options = options or ProcessOptions()
     workers = workers or default_workers()
     if workers > 1:
@@ -255,18 +274,47 @@ def process_batch(
         options = dataclasses.replace(options, sampling_workers=1)
     task = functools.partial(_process_in_batch, options=options)
     try:
-        return run_parallel(
+        processed = run_parallel(
             task,
-            videos,
-            item_args=slots,
+            [videos[i] for i in todo],
+            item_args=[slots[i] for i in todo],
             workers=workers,
             on_progress=on_progress,
             should_cancel=should_cancel,
         )
     finally:
         # Workers killed on cancel or Ctrl+C leave their unfinished files behind.
-        for slot in slots:
-            remove_partials(_slot_dir(slot))
+        for i in todo:
+            remove_partials(_slot_dir(slots[i]))
+    order = {video: index for index, video in enumerate(videos)}
+    return sorted([*skipped, *processed], key=lambda result: order[result.item])
+
+
+ARCHIVE_COMPLETE = "complete"
+ARCHIVE_OUTDATED = "outdated"
+_ARTIFACT_TOGGLES = ("summary", "thumbnail", "fingerprint")
+
+
+def archive_state(output_dir: Path, name: str, options: ProcessOptions) -> str | None:
+    """Whether the video named `name` still needs archiving with `options`.
+
+    - ``"complete"``: a complete archive made with the same options.
+    - ``"outdated"``: complete and with every requested artifact, but made with
+      other settings (e.g. another number of snapshots). It is not redone unless
+      the user asks, since that can mean re-archiving a whole library.
+    - None: it must be archived, because there is no complete manifest or an
+      artifact requested now (say, the fingerprint) was not made back then.
+    """
+    path = manifest_path(output_dir, name)
+    if not is_complete(path):
+        return None
+    recorded = (read_manifest(path) or {}).get("options") or {}
+    wanted = _recorded_options(options)
+    if any(wanted[toggle] and not recorded.get(toggle) for toggle in _ARTIFACT_TOGGLES):
+        return None
+    settings = [key for key in wanted if key not in _ARTIFACT_TOGGLES]
+    same = all(recorded.get(key) == wanted[key] for key in settings)
+    return ARCHIVE_COMPLETE if same else ARCHIVE_OUTDATED
 
 
 def _slot_dir(slot: OutputSlot) -> Path:
