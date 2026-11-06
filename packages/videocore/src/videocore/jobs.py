@@ -226,10 +226,11 @@ class Plan[T]:
         lines = []
         for item in self.items:
             action = "process" if item.pending else f"skip, {labels.get(item.state, item.state)}"
-            lines.append(f"  [{action}] {self._show(item.video)} -> {self._show(item.output)}")
+            lines.append(f"  [{action}] {self.show(item.video)} -> {self.show(item.output)}")
         return lines
 
-    def _show(self, path: Path) -> str:
+    def show(self, path: Path) -> str:
+        """`path` relative to the scanned folder or the output folder, when inside them."""
         if self.source is not None and path.is_relative_to(self.source):
             return str(path.relative_to(self.source))
         output = self.run.output
