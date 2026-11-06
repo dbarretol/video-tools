@@ -31,6 +31,10 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 | `--precise` | Take frames at exact positions (slower) | off |
 | `-w`, `--workers` | Videos processed in parallel with `--folder` | half the CPU threads |
 | `--overwrite` / `--skip-existing` | Replace existing outputs, or leave videos whose sheet or snapshot folder already exists | `--overwrite` |
+| `--dry-run` | Show what would be done for each video, without processing anything | off |
+
+With `--folder`, a plan is printed first: videos to process and already done, the length of
+video to process and a rough time estimate.
 
 Options that do not apply to the selected mode, such as `--count` with `--mode sheet`, are
 ignored with a warning.

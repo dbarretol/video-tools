@@ -21,7 +21,8 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 
 `process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
-`-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing` (default) / `--overwrite`.
+`-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing` (default) / `--overwrite`,
+`--dry-run`.
 `-v/--verbose` shows debug messages and works before or after the command name.
 
 Videos whose archive is already complete are skipped, so an interrupted or partly failed run over
@@ -30,6 +31,11 @@ incomplete, when one of its files changed or disappeared, or when an artifact is
 was not made the first time (for example `--fingerprint` after a `--no-fingerprint` run). Archives
 made with other settings, such as another grid size, are reported and kept; `--overwrite` redoes
 every video.
+
+Before processing a folder, `process` reports its plan: how many videos will be archived, how
+many are already done or were done with other settings, the length of video to process, a rough
+time estimate and files that are only in OneDrive (reading them downloads them). `--dry-run`
+prints that plan with one line per video and stops without writing anything.
 
 `verify` and `compare` exit with 0 when the videos match, 1 when they do not (or the match is
 uncertain) and 2 when a file cannot be read.
