@@ -42,7 +42,7 @@ from videocore import (
     probe,
     read_input_list,
 )
-from videocore.commands import configured, with_default_task
+from videocore.commands import configured, help_epilog, with_default_task, with_help
 from videocore.config import add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
@@ -106,6 +106,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Archive videos before deleting them: summary video, contact sheet, "
             "metadata report and perceptual fingerprint."
         ),
+        epilog=help_epilog(
+            EXAMPLES,
+            f"Without a command, `{APP_NAME} PATH...` runs `archive` (the config file can choose "
+            f"another). `{APP_NAME} help COMMAND` or `{APP_NAME} COMMAND --help` shows the "
+            "options of a command.",
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
@@ -251,7 +258,12 @@ def main(argv: list[str] | None = None) -> int:
     found an archive that is not ready), 3 some outputs are incomplete (DEGRADED),
     2 invalid arguments, inputs or config, 130 interrupted with Ctrl+C.
     """
-    argv, deprecations = translate_legacy(sys.argv[1:] if argv is None else argv)
+    argv = with_help(
+        sys.argv[1:] if argv is None else argv,
+        [*COMMAND_NAMES, "process"],
+        global_flags=GLOBAL_FLAGS,
+    )
+    argv, deprecations = translate_legacy(argv)
     argv = with_default_task(
         argv, COMMAND_NAMES, lambda: default_task(argv), global_flags=GLOBAL_FLAGS
     )
@@ -513,6 +525,25 @@ def cmd_status(args: argparse.Namespace) -> int:
 COMMAND_NAMES = ("archive", "fingerprint", "compare", "verify", "status", "config")
 GLOBAL_FLAGS = ("-v", "--verbose", "-q", "--quiet")
 """The flags that can come before the command."""
+EXAMPLES = (
+    (
+        f"{APP_NAME} movie.mp4",
+        "movie_summary\\ next to the video: summary video, contact sheet, "
+        "report, fingerprint and manifest",
+    ),
+    (
+        f"{APP_NAME} archive D:\\Videos -r",
+        "an archive for every video in the folder and its subfolders; complete ones are skipped",
+    ),
+    (
+        f"{APP_NAME} status D:\\Videos",
+        "whether every archive is complete, before deleting the originals",
+    ),
+    (
+        f"{APP_NAME} verify copy.mp4 movie_summary\\movie.fingerprint.json",
+        "whether copy.mp4 is the archived video",
+    ),
+)
 
 
 def default_task(argv: list[str]) -> str:
