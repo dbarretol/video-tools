@@ -34,6 +34,21 @@ def test_output_folder_is_created(clip, tmp_path):
     assert path.is_file()
 
 
+def test_missing_thumbnails_are_logged(clip, tmp_path, monkeypatch, caplog):
+    from videothumb import sheet
+
+    real = sheet.sample_frames
+
+    def lose_first_frame(*args, **kwargs):
+        return [None, *real(*args, **kwargs)[1:]]
+
+    monkeypatch.setattr(sheet, "sample_frames", lose_first_frame)
+
+    make_sheet(clip, tmp_path / "sheet.jpg", SheetOptions(columns=2, rows=2))
+
+    assert "has 3/4 thumbnails" in caplog.text
+
+
 def test_video_without_video_stream(audio_only, tmp_path):
     with pytest.raises(ValueError, match="No video stream"):
         make_sheet(audio_only, tmp_path / "sheet.jpg")

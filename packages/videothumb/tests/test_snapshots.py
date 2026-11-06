@@ -27,6 +27,23 @@ def test_padding_grows_with_count(clip, tmp_path):
     assert paths[0].name == "snapshot_0001.jpg"
 
 
+def test_missing_snapshots_are_logged(clip, tmp_path, monkeypatch, caplog):
+    from videothumb import snapshots
+
+    real = snapshots.iter_frames
+
+    def lose_second_frame(*args, **kwargs):
+        for index, image in real(*args, **kwargs):
+            yield index, None if index == 1 else image
+
+    monkeypatch.setattr(snapshots, "iter_frames", lose_second_frame)
+
+    paths = make_snapshots(clip, tmp_path, SnapshotOptions(count=4))
+
+    assert [p.name for p in paths] == ["snapshot_001.jpg", "snapshot_003.jpg", "snapshot_004.jpg"]
+    assert "Saved 3/4 snapshots" in caplog.text
+
+
 def test_video_without_video_stream(audio_only, tmp_path):
     with pytest.raises(ValueError, match="No video stream"):
         make_snapshots(audio_only, tmp_path)
