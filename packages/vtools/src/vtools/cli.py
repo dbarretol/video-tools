@@ -14,6 +14,7 @@ from collections.abc import Sequence
 
 from videoconsole import pause_if_alone
 from videocore import EXIT_OK, EXIT_USAGE
+from videocore.commands import help_epilog, with_help
 from videosemanticreducer import __version__ as vsr_version
 from videosemanticreducer import cli as vsr
 from videothumb import __version__ as thumb_version
@@ -37,10 +38,26 @@ OLD_COMMANDS = {"snapshots": thumb, "process": vsr}
 """Commands of earlier versions; each tool translates them with a warning."""
 CONFIGS = {"thumb": thumb, "vsr": vsr}
 GLOBAL_FLAGS = ("-v", "--verbose", "-q", "--quiet")
+COMMANDS = (*THUMB_COMMANDS, *VSR_COMMANDS, *OLD_COMMANDS, "config")
+EXAMPLES = (
+    ("vtools clip.mp4", "clip_sheet.jpg next to the video"),
+    ("vtools frames D:\\Videos --count 20", "20 full-size frames of every video in the folder"),
+    (
+        "vtools pack D:\\Videos -r",
+        "one ZIP per video, subfolders included, with its sheet and frames",
+    ),
+    (
+        "vtools archive movie.mp4",
+        "movie_summary\\: summary video, contact sheet, report and "
+        "fingerprint, before deleting the video",
+    ),
+    ("vtools status D:\\Videos", "whether every archive is complete"),
+    ("vtools gui", "the desktop app"),
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = with_help(sys.argv[1:] if argv is None else argv, COMMANDS, global_flags=GLOBAL_FLAGS)
     flags = []
     while argv and argv[0] in GLOBAL_FLAGS:
         flags.append(argv.pop(0))
@@ -99,7 +116,11 @@ def help_text() -> str:
             "",
             *rows({"config": "the defaults file of a tool: `vtools config {thumb,vsr} ...`"}),
             "",
-            "`vtools PATH...` runs the default task of videothumb (`sheet` unless its config file",
-            "sets console.default_task). `vtools COMMAND --help` shows the options of a command.",
+            help_epilog(
+                EXAMPLES,
+                "`vtools PATH...` runs the default task of videothumb (`sheet` unless its config "
+                "file sets console.default_task). `vtools help COMMAND` or `vtools COMMAND "
+                "--help` shows the options of a command.",
+            ),
         ]
     )
