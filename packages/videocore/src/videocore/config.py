@@ -60,6 +60,8 @@ class Section:
     comment: str | None = None
     """Shown next to the section name in the template."""
     skip: tuple[str, ...] = ()
+    renamed: tuple[tuple[str, str], ...] = ()
+    """Old option names and their new ones, to tell users of old files what changed."""
 
     def options(self) -> list[Option]:
         seen = set(self.skip)
@@ -92,6 +94,8 @@ class AppConfig:
     sections: tuple[Section, ...]
     description: str
     """First line of the template, e.g. "videothumb defaults for the command line."."""
+    renamed: tuple[tuple[str, str], ...] = ()
+    """Old section names and their new ones."""
 
     @property
     def env_var(self) -> str:
@@ -166,6 +170,8 @@ class AppConfig:
         if not isinstance(data, dict):
             raise ConfigError(f"{path}: {self._expected_sections()}")
         if unknown := [key for key in data if key not in names]:
+            if new := dict(self.renamed).get(unknown[0]):
+                raise ConfigError(f"{path}: unknown section '{unknown[0]}': it is now '{new}:'")
             expected = self._expected_sections()
             raise ConfigError(f"{path}: unknown section '{unknown[0]}'; {expected}")
         for section in self.sections:
@@ -174,7 +180,9 @@ class AppConfig:
             if not isinstance(raw, dict):
                 raise ConfigError(f"{where}'{section.name}' must be a mapping of option: value")
             try:
-                parsed = parse_mapping(section.classes, raw, skip=section.skip)
+                parsed = parse_mapping(
+                    section.classes, raw, skip=section.skip, renamed=dict(section.renamed)
+                )
                 for cls in section.classes:  # checks that involve several options
                     cls(**section.pick(cls, parsed))
             except ValueError as exc:
@@ -234,6 +242,9 @@ class AppConfig:
         if matches:
             keys = ", ".join(f"{s.name}.{key}" for s, _ in matches)
             raise ConfigError(f"'{key}' is in several sections; use one of {keys}")
+        for section in self.sections:
+            if new := dict(section.renamed).get(key):
+                raise ConfigError(f"Unknown option '{key}': it is now '{new}'")
         valid = ", ".join(self.keys())
         raise ConfigError(f"Unknown option '{key}' (valid options: {valid})")
 
