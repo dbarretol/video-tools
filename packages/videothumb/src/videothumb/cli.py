@@ -154,6 +154,12 @@ def add_verbosity(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--json", action="store_true", help=JSON_HELP)
     parser.add_argument("--open", action="store_true", help="open the output folder when done")
+    parser.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="no live progress bar; one line per video instead",
+    )
 
 
 LEGACY_FLAGS = ("--mode", "--video", "--folder")
@@ -211,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         pause_if_alone()
         return EXIT_OK
-    console = Console(quiet=args.quiet, json=args.json, tool=APP_NAME)
+    console = Console(quiet=args.quiet, json=args.json, progress=args.progress, tool=APP_NAME)
     console.record(command=args.command)
     if deprecation:
         console.warning(deprecation)
