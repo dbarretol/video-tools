@@ -14,6 +14,7 @@ from videocore import (
     EXIT_USAGE,
     ItemResult,
     Plan,
+    ProgressEvent,
     RunOptions,
     Status,
     UsageError,
@@ -198,7 +199,7 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options) -> int:
         status = "ok" if result.ok else "FAILED"
         print(f"[{done}/{total}] {result.video.name}: {status}")
 
-    report = execute(planned, on_progress=progress)
+    report = execute(planned, on_progress=progress, on_event=log_event)
     failed = report.failed
     skipped = report.count(Status.SKIPPED)
     summary = f"Done: {report.count(Status.OK)} succeeded, {len(failed)} failed"
@@ -208,6 +209,12 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options) -> int:
     for result in failed:
         print(f"  - {result.video.name}: {result.error}", file=sys.stderr)
     return report.exit_code
+
+
+def log_event(event: ProgressEvent) -> None:
+    """Progress inside each video, for -v."""
+    if event.kind == "stage" and event.total:
+        logger.debug("%s: %s %d/%d", event.item.name, event.stage, event.done, event.total)
 
 
 def print_plan(planned: Plan) -> None:

@@ -54,7 +54,9 @@ def make_snapshots(
 
     saved = []
     # Full-resolution frames are written as they are decoded instead of all being held in memory.
-    frames = iter_frames(info.path, timestamps, mode=options.sampling, workers=decoders)
+    frames = iter_frames(
+        info.path, timestamps, mode=options.sampling, workers=decoders, stage="snapshots"
+    )
     for index, image in frames:
         if image is None:
             continue

@@ -76,7 +76,12 @@ def make_sheet(
     width = options.thumbnail_width
     height = max(2, round(width * info.video.height / info.video.width))
     frames = sample_frames(
-        info.path, timestamps, mode=options.sampling, size=(width, height), workers=decoders
+        info.path,
+        timestamps,
+        mode=options.sampling,
+        size=(width, height),
+        workers=decoders,
+        stage="frames",
     )
     decoded = sum(frame is not None for frame in frames)
     if decoded == 0:
