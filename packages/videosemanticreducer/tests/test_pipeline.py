@@ -136,6 +136,46 @@ def test_process_batch_isolates_failures(clip, tmp_path):
     assert not results[1].ok
 
 
+def test_batch_videos_sharing_a_stem_get_separate_folders(clip, tmp_path):
+    for name in ("clip.mp4", "clip.mkv"):
+        (tmp_path / name).write_bytes(clip.read_bytes())
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+
+    results = process_batch(
+        [tmp_path / "clip.mkv", tmp_path / "clip.mp4"], None, options, workers=1
+    )
+
+    assert [r.value for r in results] == [
+        tmp_path / "clip.mkv_summary",
+        tmp_path / "clip.mp4_summary",
+    ]
+    assert (tmp_path / "clip.mp4_summary" / "clip.mp4_thumb.jpg").is_file()
+    assert (tmp_path / "clip.mkv_summary" / "clip.mkv_info.txt").is_file()
+    assert is_output_dir(tmp_path / "clip.mp4_summary")
+
+
+def test_batch_recreates_subfolders_in_the_output(clip, tmp_path):
+    source, out = tmp_path / "videos", tmp_path / "out"
+    for sub in ("x", "y"):
+        (source / sub).mkdir(parents=True)
+        (source / sub / "clip.mp4").write_bytes(clip.read_bytes())
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    videos = [source / "x" / "clip.mp4", source / "y" / "clip.mp4"]
+
+    results = process_batch(videos, out, options, source=source, workers=1)
+
+    assert [r.value for r in results] == [out / "x" / "clip_summary", out / "y" / "clip_summary"]
+
+
+def test_batch_collision_fails_before_processing(clip, tmp_path):
+    from videocore import OutputCollisionError
+
+    videos = [tmp_path / "x" / "clip.mp4", tmp_path / "y" / "clip.mp4"]
+    with pytest.raises(OutputCollisionError):
+        process_batch(videos, tmp_path / "out", workers=1)
+    assert not (tmp_path / "out").exists()
+
+
 def test_resolve_output_dir():
     video = Path("videos/movie.mp4")
     assert resolve_output_dir(video, None, batch=False) == Path("videos/movie_summary")

@@ -98,6 +98,21 @@ def test_run_parallel_isolates_errors_and_keeps_order(tmp_path, workers):
     assert sorted(progress) == [1, 2, 3]
 
 
+@pytest.mark.parametrize("workers", [1, 2])
+def test_run_parallel_passes_item_args(workers):
+    items = [Path("a"), Path("b")]
+
+    results = run_parallel(os.path.join, items, item_args=["x", "y"], workers=workers)
+
+    assert [r.value for r in results] == [os.path.join("a", "x"), os.path.join("b", "y")]
+    assert [r.item for r in results] == items
+
+
+def test_run_parallel_item_args_must_match_items():
+    with pytest.raises(ValueError, match="one value per item"):
+        run_parallel(os.path.join, [Path("a")], item_args=[], workers=1)
+
+
 def test_run_parallel_inline_cancellation():
     items = [Path(f"v{i}.mp4") for i in range(5)]
     seen = []

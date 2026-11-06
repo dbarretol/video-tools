@@ -42,6 +42,40 @@ def test_process_folder_isolates_failures(folder, tmp_path, workers):
     assert "VideoOpenError" in by_name["broken.mp4"].error
 
 
+@pytest.mark.parametrize(
+    ("mode", "outputs"),
+    [
+        (Mode.SHEET, ["clip.mkv_sheet.jpg", "clip.mp4_sheet.jpg"]),
+        (Mode.SNAPSHOTS, ["clip.mkv_snapshots", "clip.mp4_snapshots"]),
+    ],
+)
+def test_videos_sharing_a_stem_do_not_overwrite_each_other(clip, tmp_path, mode, outputs):
+    for name in ("clip.mp4", "clip.mkv"):
+        (tmp_path / name).write_bytes(clip.read_bytes())
+    options = SHEET if mode is Mode.SHEET else SNAPSHOTS
+
+    results = process_folder(find_videos(tmp_path), mode, options, workers=1)
+
+    assert all(r.ok for r in results)
+    assert sorted(p.name for p in tmp_path.iterdir() if p.suffix not in (".mp4", ".mkv")) == outputs
+
+
+def test_recursive_batch_recreates_subfolders_in_the_output(clip, tmp_path):
+    source, out = tmp_path / "videos", tmp_path / "out"
+    for sub in ("x", "y"):
+        (source / sub).mkdir(parents=True)
+        (source / sub / "clip.mp4").write_bytes(clip.read_bytes())
+
+    videos = find_videos(source, recursive=True)
+    results = process_folder(videos, Mode.SHEET, SHEET, root=out, source=source, workers=1)
+
+    assert [r.value for r in results] == [
+        out / "x" / "clip_sheet.jpg",
+        out / "y" / "clip_sheet.jpg",
+    ]
+    assert all(r.value.is_file() for r in results)
+
+
 def test_process_folder_can_be_cancelled(folder):
     results = process_folder(
         find_videos(folder), Mode.SNAPSHOTS, SNAPSHOTS, workers=1, should_cancel=lambda: True
