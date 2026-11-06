@@ -67,6 +67,10 @@ Both tools use the same exit codes, so scripts can tell what happened:
 | 3 | Nothing failed, but some outputs are incomplete (DEGRADED); `--strict` turns this into 1 |
 | 130 | Interrupted with Ctrl+C; unfinished files were removed |
 
+When a video fails, the error is followed by a hint for the common causes (a damaged or
+unsupported file, no video stream, a file only in OneDrive, a full disk, denied access, a file
+moved during the run) and by the path of the log file, which has the technical details.
+
 Every output is read back right after being written. A video whose outputs are written but
 incomplete, for example a contact sheet where fewer than 90% of the thumbnails could be decoded,
 is reported as DEGRADED. A script that only accepts complete results can check for it:
