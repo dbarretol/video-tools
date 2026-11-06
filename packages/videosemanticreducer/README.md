@@ -21,7 +21,18 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 
 `process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
-`-r/--recursive`, `-w/--workers`, `-o/--output`.
+`-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing` (default) / `--overwrite`.
+`-v/--verbose` shows debug messages and works before or after the command name.
+
+Videos whose archive is already complete are skipped, so an interrupted or partly failed run over
+a folder can simply be started again. A video is archived again when its manifest is missing or
+incomplete, when one of its files changed or disappeared, or when an artifact is requested that
+was not made the first time (for example `--fingerprint` after a `--no-fingerprint` run). Archives
+made with other settings, such as another grid size, are reported and kept; `--overwrite` redoes
+every video.
+
+`verify` and `compare` exit with 0 when the videos match, 1 when they do not (or the match is
+uncertain) and 2 when a file cannot be read.
 
 Folder scans skip hidden files and folders (such as macOS `._movie.mp4` files), and recursive scans
 skip the `<stem>_summary` folders written by earlier runs, so summary videos are never archived

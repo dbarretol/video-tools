@@ -57,6 +57,15 @@ videosemanticreducer verify downloaded.mp4 movie_summary/movie.fingerprint.json
 Each tool's README documents every option: [videothumb](packages/videothumb/README.md),
 [videosemanticreducer](packages/videosemanticreducer/README.md).
 
+Both tools use the same exit codes, so scripts can tell what happened:
+
+| Code | Meaning |
+|---:|---|
+| 0 | Everything succeeded (videos skipped because their output already exists count as success) |
+| 1 | At least one video failed; for `verify` and `compare`, the videos do not match |
+| 2 | Invalid arguments, a missing input, or an invalid config file; nothing was processed |
+| 130 | Interrupted with Ctrl+C; unfinished files were removed |
+
 ## Performance
 
 Frames are decoded in-process and only where needed: keyframe seeking for previews, precise
