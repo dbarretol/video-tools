@@ -85,6 +85,7 @@ def make_sheet(
         size=(width, height),
         workers=decoders,
         stage="frames",
+        fallback=True,
     )
     decoded = sum(frame is not None for frame in frames)
     if counts is not None:

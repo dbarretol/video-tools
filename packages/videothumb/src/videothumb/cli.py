@@ -74,7 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--precise",
         action="store_true",
-        help="frames at exact positions (slower); by default the nearest earlier keyframe is used",
+        help=(
+            "frames at exact positions (slower); by default the nearest earlier keyframe is "
+            "used, and exact positions only where keyframes would repeat"
+        ),
     )
     add_arguments(parser, RunOptions, skip=("output",))
     existing = parser.add_mutually_exclusive_group()
