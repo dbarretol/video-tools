@@ -353,3 +353,39 @@ def test_json_dry_run_and_errors(folder, tmp_path, capsys):
     assert document["error"]["type"] == "UsageError"
     assert document["error"]["message"].startswith("Video not found")
     assert document["exit_code"] == 2
+
+
+def test_open_shows_the_output_folder(folder, tmp_path, monkeypatch):
+    opened = []
+    monkeypatch.setattr("videoconsole.desktop.open_folder", opened.append)
+    out = tmp_path / "out"
+    args = ["--folder", str(folder), "--mode", "sheet", "-w", "1", "-o", str(out), "--open"]
+    assert cli.main(args) == 1  # broken.mp4 fails, the others are there to look at
+    assert opened == [out]
+
+    sheet = tmp_path / "single" / "s.jpg"
+    sheet.parent.mkdir()
+    video = folder / "a.mp4"
+    assert cli.main(["--video", str(video), "--mode", "sheet", "-o", str(sheet), "--open"]) == 0
+    assert opened == [out, sheet.parent]
+
+
+def test_console_section_of_the_config(clip, tmp_path, monkeypatch):
+    from videoconsole import ConsoleOptions, Desktop
+
+    config = tmp_path / "c.yaml"
+    config.write_text("console:\n  notify_after: 0\n  keep_awake: false\n", encoding="utf-8")
+    seen = []
+    real = Desktop.configure
+    monkeypatch.setattr(Desktop, "configure", lambda self, o: seen.append(o) or real(self, o))
+    args = ["--video", str(clip), "--mode", "sheet", "-o", str(tmp_path / "s.jpg")]
+    assert cli.main([*args, "--config", str(config)]) == 0
+    assert seen == [ConsoleOptions(notify_after=0, keep_awake=False)]
+
+
+def test_invalid_arguments_pause_when_launched_alone(monkeypatch):
+    paused = []
+    monkeypatch.setattr(cli, "pause_if_alone", lambda: paused.append(True))
+    with pytest.raises(SystemExit):
+        cli.main(["--mode", "sheet"])
+    assert paused == [True]

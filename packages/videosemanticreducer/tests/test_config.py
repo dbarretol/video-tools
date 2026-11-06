@@ -57,7 +57,7 @@ def test_integer_snap_duration_is_accepted(tmp_path):
         ("process:\n  num_snapshots: many\n", "'num_snapshots' must be int"),
         ("process:\n  num_snapshots: true\n", "'num_snapshots' must be int"),
         ("process:\n  summary: 1\n", "'summary' must be bool"),
-        ("other:\n  x: 1\n", "single 'process:' section"),
+        ("other:\n  x: 1\n", "unknown section 'other'; expected the sections 'process:'"),
         ("process: [1, 2]\n", "must be a mapping"),
         ("process:\n  num_snapshots: [\n", "Could not read"),
         ("process:\n  num_snapshots: 0\n", "'num_snapshots' must be greater than 0, got 0"),

@@ -314,3 +314,16 @@ def test_process_and_status_json(clip, tmp_path, capsys):
     assert main(["status", str(tmp_path), "--json"]) == 1
     statuses = [a["status"] for a in json.loads(capsys.readouterr().out)["archives"]]
     assert statuses == ["not_archived", "ready"]
+
+
+def test_process_open_and_help_pause(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import cli
+
+    opened, paused = [], []
+    monkeypatch.setattr("videoconsole.desktop.open_folder", opened.append)
+    monkeypatch.setattr(cli, "pause_if_alone", lambda: paused.append(True))
+    out = tmp_path / "out"
+    assert main(["process", str(clip), "-o", str(out), "--open", *FAST]) == 0
+    assert opened == [out]
+    assert main([]) == 0  # double-clicked: the help stays on screen
+    assert paused == [True]
