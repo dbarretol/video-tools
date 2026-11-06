@@ -8,7 +8,9 @@ after an interrupted one. Running it has two steps:
    already done (or done with other settings) and measures the video to process.
    Nothing is written, so it also serves ``--dry-run`` and previews.
 2. `execute` processes the pending videos in parallel and returns a `RunReport`
-   with one `ItemResult` per planned video, in plan order.
+   with one `ItemResult` per planned video, in plan order. Each video is checked
+   with `Task.verify` right after being processed: OK, DEGRADED (incomplete
+   outputs) or FAILED.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from videocore.batch import BatchResult, default_workers, is_offline, run_parallel
-from videocore.errors import EXIT_FAILED, EXIT_OK
+from videocore.errors import EXIT_DEGRADED, EXIT_FAILED, EXIT_OK
 from videocore.options import option, validate
 from videocore.outputs import OutputSlot, plan_outputs
 from videocore.probe import format_hms, probe
@@ -39,6 +41,8 @@ PARALLEL_GAIN = 0.7
 
 class Status(StrEnum):
     OK = "ok"
+    DEGRADED = "degraded"
+    """Processed, but some outputs are incomplete (see `ItemResult.problems`)."""
     FAILED = "failed"
     SKIPPED = "skipped"
     """Its outputs already exist and match the options; not processed."""
@@ -97,6 +101,15 @@ class Task[T](Protocol):
 
         `decoders` is how many containers may decode the video in parallel; None
         lets the task decide (one video at a time can use several).
+        """
+        ...
+
+    def verify(self, output: Path, value: Any, options: T) -> list[str]:
+        """Check the outputs just written; runs in the worker right after `run`.
+
+        `value` is what `run` returned. Raise (e.g. ``videocore.verify.OutputError``)
+        when an output is missing or unusable; return the problems of outputs that
+        are only incomplete, which make the video DEGRADED. See ``videocore.verify``.
         """
         ...
 
@@ -272,10 +285,13 @@ class ItemResult:
     error_type: str | None = None
     """Exception class name, e.g. ``"VideoOpenError"``."""
     seconds: float | None = None
+    problems: list[str] = field(default_factory=list)
+    """Why a DEGRADED video's outputs are incomplete."""
 
     @property
     def ok(self) -> bool:
-        return self.status in (Status.OK, *DONE_STATES)
+        """Its outputs exist: OK, DEGRADED, SKIPPED or OUTDATED."""
+        return self.status in (Status.OK, Status.DEGRADED, *DONE_STATES)
 
 
 @dataclass
@@ -296,8 +312,20 @@ class RunReport:
         return any(item.status is Status.CANCELLED for item in self.items)
 
     @property
+    def degraded(self) -> list[ItemResult]:
+        return [item for item in self.items if item.status is Status.DEGRADED]
+
+    @property
     def exit_code(self) -> int:
-        return EXIT_FAILED if self.failed else EXIT_OK
+        return self.exit_status()
+
+    def exit_status(self, *, strict: bool = False) -> int:
+        """1 if a video failed, 3 if some are DEGRADED (1 with `strict`), else 0."""
+        if self.failed:
+            return EXIT_FAILED
+        if self.degraded:
+            return EXIT_FAILED if strict else EXIT_DEGRADED
+        return EXIT_OK
 
     def measured_speed(self) -> float | None:
         """How many times longer than `Task.estimate` the processed videos took.
@@ -310,7 +338,8 @@ class RunReport:
         took = expected = 0.0
         for result in self.items:
             item = planned[result.video]
-            if result.status is not Status.OK or result.seconds is None or not item.duration:
+            done = result.status in (Status.OK, Status.DEGRADED)
+            if not done or result.seconds is None or not item.duration:
                 continue
             estimate = self.plan.task.estimate(item.duration, self.plan.options)
             if not estimate:
@@ -394,20 +423,36 @@ def _run_item(
 ) -> Any:
     # Module-level so it can be pickled into worker processes.
     output, name = target
-    return task.run(video, output, name, options, decoders)
+    value = task.run(video, output, name, options, decoders)
+    problems = list(task.verify(output, value, options))
+    for problem in problems:
+        logger.warning("%s: %s", video.name, problem)
+    return _Outcome(value, problems)
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    value: Any
+    problems: list[str]
 
 
 def _item_result(result: BatchResult, output: Path) -> ItemResult:
+    outcome = result.value if isinstance(result.value, _Outcome) else _Outcome(result.value, [])
+    if result.cancelled:
+        status = Status.CANCELLED
+    elif not result.ok:
+        status = Status.FAILED
+    else:
+        status = Status.DEGRADED if outcome.problems else Status.OK
     return ItemResult(
         video=result.item,
         output=output,
-        status=Status.CANCELLED
-        if result.cancelled
-        else (Status.OK if result.ok else Status.FAILED),
-        value=result.value,
+        status=status,
+        value=outcome.value,
         error=result.error,
         error_type=result.error_type,
         seconds=result.seconds,
+        problems=outcome.problems,
     )
 
 

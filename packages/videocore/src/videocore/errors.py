@@ -17,5 +17,7 @@ EXIT_FAILED = 1
 """At least one video failed (or, for `verify`, the video does not match)."""
 EXIT_USAGE = 2
 """Invalid arguments, inputs or config; nothing was processed."""
+EXIT_DEGRADED = 3
+"""No video failed, but some outputs are incomplete (DEGRADED)."""
 EXIT_INTERRUPTED = 130
 """Stopped with Ctrl+C (128 + SIGINT, the shell convention)."""

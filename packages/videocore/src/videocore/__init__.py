@@ -4,6 +4,7 @@ from importlib.metadata import version
 
 from videocore.batch import BatchResult, default_workers, find_videos, run_parallel
 from videocore.errors import (
+    EXIT_DEGRADED,
     EXIT_FAILED,
     EXIT_INTERRUPTED,
     EXIT_OK,
@@ -42,6 +43,7 @@ from videocore.state import State
 __version__ = version("videocore")
 
 __all__ = [
+    "EXIT_DEGRADED",
     "EXIT_FAILED",
     "EXIT_INTERRUPTED",
     "EXIT_OK",
