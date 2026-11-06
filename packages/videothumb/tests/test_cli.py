@@ -111,7 +111,7 @@ def test_skip_existing_leaves_outputs_alone(folder, capsys):
     args = ["--folder", str(folder), "--mode", "sheet", "-w", "1", "--skip-existing"]
 
     assert cli.main(args) == 1  # broken.mp4 still fails
-    assert "1 succeeded, 1 failed, 1 skipped" in capsys.readouterr().out
+    assert "1 succeeded, 1 skipped (output already exists), 1 failed." in capsys.readouterr().out
     assert (folder / "a_sheet.jpg").read_bytes() == b"from an earlier run"
     assert (folder / "b_sheet.jpg").is_file()
 
@@ -292,3 +292,25 @@ def test_failed_batch_lists_the_videos_to_retry(folder, capsys):
     assert "Videos to retry are listed in" in capsys.readouterr().out
     (failed,) = default_runs_dir("videothumb").glob("*_sheet_failed.txt")
     assert str((folder / "broken.mp4").resolve()) in failed.read_text(encoding="utf-8-sig")
+
+
+def test_quiet_leaves_only_what_needs_attention(folder, capsys):
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1", "-q"]) == 1
+    captured = capsys.readouterr()
+    assert "to process" not in captured.out and "Done:" not in captured.out
+    assert "[1/3]" not in captured.out
+    assert "Videos to retry are listed in" in captured.out
+    assert "  - broken.mp4: VideoOpenError" in captured.err
+
+    (folder / "broken.mp4").unlink()
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "-w", "1", "-q"]) == 0
+    assert capsys.readouterr() == ("", "")
+
+
+def test_names_with_brackets_are_printed_as_they_are(clip, tmp_path, capsys):
+    import shutil
+
+    video = tmp_path / "clip [1080p] [bold]x.mp4"
+    shutil.copy(clip, video)
+    assert cli.main(["--video", str(video), "--mode", "sheet"]) == 0
+    assert "clip [1080p] [bold]x_sheet.jpg" in capsys.readouterr().out

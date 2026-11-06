@@ -1,5 +1,4 @@
 import dataclasses
-import logging
 import shutil
 
 import pytest
@@ -69,27 +68,38 @@ def test_process_missing_input_is_a_usage_error(tmp_path):
     assert main(["process", str(tmp_path / "missing.mp4")]) == 2
 
 
+def spy_logging(monkeypatch, tmp_path):
+    calls = []
+
+    def setup(app, console, *, verbose):
+        calls.append((verbose, console.quiet))
+        return tmp_path / "x.log"
+
+    monkeypatch.setattr("videosemanticreducer.cli.setup_logging", setup)
+    return calls
+
+
 @pytest.mark.parametrize("position", ["before", "after"])
-def test_verbose_works_before_or_after_the_subcommand(tmp_path, position, monkeypatch):
-    levels = []
-    monkeypatch.setattr(
-        "videosemanticreducer.cli.configure_logging",
-        lambda name, level, console: levels.append(level) or tmp_path / "x.log",
-    )
+def test_verbose_and_quiet_work_before_or_after_the_subcommand(tmp_path, position, monkeypatch):
+    calls = spy_logging(monkeypatch, tmp_path)
     missing = str(tmp_path / "missing.mp4")
     argv = ["-v", "process", missing] if position == "before" else ["process", missing, "-v"]
     main(argv)
-    assert levels == [logging.DEBUG]
+    flags = ["-q", "status", missing] if position == "before" else ["status", missing, "-q"]
+    main(flags)
+    assert calls == [(True, False), (False, True)]
 
 
-def test_without_verbose_logs_at_info(tmp_path, monkeypatch):
-    levels = []
-    monkeypatch.setattr(
-        "videosemanticreducer.cli.configure_logging",
-        lambda name, level, console: levels.append(level) or tmp_path / "x.log",
-    )
+def test_logs_go_to_the_console_only_with_verbose(tmp_path, monkeypatch, capsys):
+    calls = spy_logging(monkeypatch, tmp_path)
     main(["process", str(tmp_path / "missing.mp4")])
-    assert levels == [logging.INFO]
+    assert calls == [(False, False)]
+    assert capsys.readouterr().err.startswith("Error: Input not found")
+
+
+def test_debug_messages_print_with_verbose(clip, tmp_path, capsys):
+    assert main(["process", str(clip), "-o", str(tmp_path / "out"), "-v", *FAST]) == 0
+    assert "summary video" in capsys.readouterr().err  # the stages of the video
 
 
 @pytest.mark.parametrize(
@@ -104,15 +114,15 @@ def test_invalid_option_values_are_rejected(clip, capsys, option, value):
     assert "must be greater than 0" in err or "expected" in err
 
 
-def test_complete_archives_are_skipped_unless_overwrite(clip, tmp_path, caplog):
+def test_complete_archives_are_skipped_unless_overwrite(clip, tmp_path, capsys):
     out = tmp_path / "out"
     args = ["process", str(clip), "-o", str(out), "--no-fingerprint", *FAST]
     assert main(args) == 0
     first = (out / "clip_thumb.jpg").stat().st_mtime_ns
+    assert f"Archived {clip} in {out}" in capsys.readouterr().out
 
-    caplog.clear()
     assert main(args) == 0
-    assert "already archived" in caplog.text
+    assert "already archived" in capsys.readouterr().out
     assert (out / "clip_thumb.jpg").stat().st_mtime_ns == first
 
     assert main([*args, "--overwrite"]) == 0
@@ -127,17 +137,18 @@ def test_newly_requested_artifacts_are_not_skipped(clip, tmp_path):
     assert (out / "clip.fingerprint.json").is_file()
 
 
-def test_archives_made_with_other_settings_are_reported_not_redone(clip, tmp_path, caplog):
+def test_archives_made_with_other_settings_are_reported_not_redone(clip, tmp_path, capsys):
     folder = tmp_path / "videos"
     folder.mkdir()
     shutil.copy(clip, folder / "a.mp4")
     base = ["process", str(folder), "-w", "1", "--no-fingerprint", "--no-video"]
     assert main([*base, "--thumb-cols", "2", "--thumb-rows", "2"]) == 0
 
-    caplog.clear()
+    capsys.readouterr()
     assert main([*base, "--thumb-cols", "3", "--thumb-rows", "2"]) == 0
-    assert "1 archived with other settings (not redone)" in caplog.text
-    assert "--overwrite" in caplog.text
+    out = capsys.readouterr().out
+    assert "1 archived with other settings (not redone)" in out
+    assert "--overwrite" in out
 
 
 def test_incomplete_archive_is_redone(clip, tmp_path):
@@ -232,32 +243,31 @@ def test_dry_run_of_one_video(clip, tmp_path, capsys):
     assert not out.exists()
 
 
-def test_batch_logs_the_plan_first(clip, tmp_path, caplog):
+def test_batch_prints_the_plan_first(clip, tmp_path, capsys):
     folder = tmp_path / "videos"
     folder.mkdir()
     shutil.copy(clip, folder / "a.mp4")
-    caplog.set_level(logging.INFO)
     assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 0
-    messages = [r.getMessage() for r in caplog.records]
-    plan_line = messages.index("1 video: 1 to process")
-    assert plan_line < next(i for i, m in enumerate(messages) if m.startswith("[1/1]"))
+    out = capsys.readouterr().out
+    assert out.index("1 video: 1 to process") < out.index("[1/1] a.mp4: OK")
+    assert "Done: 1 archived, 0 failed." in out
 
 
-def test_failures_come_with_a_hint_and_the_log_path(audio_only, clip, tmp_path, caplog):
+def test_failures_come_with_a_hint_and_the_log_path(audio_only, clip, tmp_path, capsys):
     assert main(["process", str(audio_only), "-o", str(tmp_path / "out")]) == 1
-    assert "Hint: it has no video to take frames from" in caplog.text
-    assert "Details: " in caplog.text and "videosemanticreducer" in caplog.text
+    err = capsys.readouterr().err
+    assert "Hint: it has no video to take frames from" in err
+    assert "Details: " in err and "videosemanticreducer" in err
 
-    caplog.clear()
     folder = tmp_path / "videos"
     folder.mkdir()
     shutil.copy(clip, folder / "good.mp4")
     (folder / "broken.mp4").write_bytes(b"not a video")
     assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 1
-    assert "Hint: the file may be damaged" in caplog.text
+    assert "    Hint: the file may be damaged" in capsys.readouterr().err
 
 
-def test_interrupted_batch_says_how_to_resume(clip, tmp_path, monkeypatch, caplog):
+def test_interrupted_batch_says_how_to_resume(clip, tmp_path, monkeypatch, capsys):
     from videocore import default_runs_dir
     from videosemanticreducer import pipeline
 
@@ -274,7 +284,9 @@ def test_interrupted_batch_says_how_to_resume(clip, tmp_path, monkeypatch, caplo
 
     monkeypatch.setattr(pipeline, "process_video", stop_at_b)
     assert main(["process", str(folder), "-w", "1", "--no-video", *FAST]) == 130
-    assert "1 archived" in caplog.text and "1 not finished" in caplog.text
-    assert "run the same command again to resume" in caplog.text
+    captured = capsys.readouterr()
+    assert "Done: 1 archived, 0 failed, 1 not finished." in captured.out
+    assert "to resume, run the same command again" in captured.out
+    assert "Interrupted" in captured.err
     (pending,) = default_runs_dir("videosemanticreducer").glob("*_archive_pending.txt")
     assert str((folder / "b.mp4").resolve()) in pending.read_text(encoding="utf-8-sig")
