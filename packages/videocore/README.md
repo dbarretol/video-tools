@@ -5,6 +5,13 @@ grid composition, parallel batch processing, output planning, atomic writes, con
 state between runs. Not intended to be
 used on its own.
 
+## Frames
+
+`sample_frames`/`iter_frames` take frames at exact positions (`mode="precise"`) or at the
+keyframe before each position (`mode="keyframe"`, several times faster). With `fallback=True`,
+keyframe mode takes precisely the positions where it would repeat the previous keyframe or got no
+frame, so every position shows a distinct frame.
+
 ## Options
 
 A tool declares each of its options once, as a dataclass field created with

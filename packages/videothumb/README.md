@@ -46,8 +46,10 @@ Options that do not apply to the selected mode, such as `--count` with `--mode s
 ignored with a warning.
 
 By default frames are taken from the nearest keyframe at or before each position, which is several
-times faster; thumbnails are labeled with the time of the frame actually shown. Use `--precise`
-when exact positions matter.
+times faster; thumbnails are labeled with the time of the frame actually shown. When two positions
+fall on the same keyframe (videos with keyframes far apart, such as screen recordings) or a
+keyframe cannot be decoded, that position is taken at its exact time instead, so the sheet never
+repeats a frame. Use `--precise` to take every position at its exact time.
 
 Folder scans skip hidden files and folders. When two videos would write to the same place under the
 same name, such as `clip.mp4` and `clip.mkv`, their outputs include the extension
