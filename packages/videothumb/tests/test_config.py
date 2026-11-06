@@ -57,6 +57,10 @@ def test_invalid_config_is_a_usage_error(clip, tmp_path, capsys):
     assert cli.main(args) == 2
     assert "unknown option 'output'" in capsys.readouterr().err
 
+    config.write_text("snapshots:\n  count: 3\n", encoding="utf-8")
+    assert cli.main(args) == 2
+    assert "unknown section 'snapshots': it is now 'frames:'" in capsys.readouterr().err
+
 
 def test_config_commands(clip, tmp_path, capsys):
     assert cli.main(["config", "path"]) == 0

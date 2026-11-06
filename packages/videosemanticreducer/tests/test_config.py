@@ -58,6 +58,10 @@ def test_integer_snap_duration_is_accepted(tmp_path):
         ("archive:\n  num_snapshots: true\n", "'num_snapshots' must be int"),
         ("archive:\n  summary: 1\n", "'summary' must be bool"),
         ("other:\n  x: 1\n", "unknown section 'other'; expected the sections 'archive:'"),
+        # Files written before 0.2
+        ("process:\n  workers: 1\n", "unknown section 'process': it is now 'archive:'"),
+        ("archive:\n  thumb_cols: 6\n", "unknown option 'thumb_cols': it is now 'sheet_columns'"),
+        ("archive:\n  thumbnail: false\n", "unknown option 'thumbnail': it is now 'sheet'"),
         ("archive: [1, 2]\n", "must be a mapping"),
         ("archive:\n  num_snapshots: [\n", "Could not read"),
         ("archive:\n  num_snapshots: 0\n", "'num_snapshots' must be greater than 0, got 0"),

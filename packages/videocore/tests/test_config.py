@@ -100,6 +100,32 @@ def test_invalid_files_name_the_problem(tmp_path, text, message):
     assert str(path) in str(raised.value)
 
 
+RENAMED = AppConfig(
+    "demo",
+    (Section("sheet", (Sheet,), renamed=(("cols", "columns"),)), Section("snaps", (Snaps,))),
+    "demo defaults.",
+    renamed=(("snapshots", "snaps"),),
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("snapshots:\n  count: 3\n", "unknown section 'snapshots': it is now 'snaps:'"),
+        ("sheet:\n  cols: 3\n", "sheet: unknown option 'cols': it is now 'columns'"),
+    ],
+)
+def test_old_names_get_their_new_name(tmp_path, text, message):
+    with pytest.raises(ConfigError, match=message):
+        RENAMED.load(write(tmp_path / "c.yaml", text))
+
+
+def test_set_with_an_old_name_gives_the_new_one(tmp_path):
+    with pytest.raises(ConfigError, match="'cols': it is now 'columns'"):
+        RENAMED.set_value(tmp_path / "c.yaml", "cols", "3")
+    assert not (tmp_path / "c.yaml").exists()
+
+
 def test_find_and_target_follow_the_lookup_order(tmp_path, monkeypatch):
     default = CONFIG.default_path()
     assert default == tmp_path / "appdata" / "demo" / "config.yaml"

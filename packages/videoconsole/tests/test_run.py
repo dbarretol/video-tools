@@ -178,6 +178,23 @@ def test_debug_messages_reach_the_console_only_when_verbose(capsys):
     setup_logging("app", Console(), verbose=False)  # leave no console handler behind
 
 
+def test_warnings_for_the_user_reach_the_console_without_verbose(capsys):
+    from videocore.logging_setup import FOR_THE_USER
+
+    log = logging.getLogger("videoconsole.test")
+    setup_logging("app", Console(), verbose=False)
+    log.warning("only in the log")
+    log.warning("a worker stopped", extra=FOR_THE_USER)
+    err = capsys.readouterr().err
+    assert "Warning: a worker stopped" in err
+    assert "only in the log" not in err
+
+    setup_logging("app", Console(), verbose=True)
+    log.warning("once", extra=FOR_THE_USER)
+    assert capsys.readouterr().err.count("once") == 1
+    setup_logging("app", Console(), verbose=False)
+
+
 def test_json_document(planned, tmp_path, capsys):
     import json
 
