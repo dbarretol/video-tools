@@ -8,6 +8,7 @@ from videosemanticreducer.pipeline import (
     INFO_CARD_DURATION,
     ProcessOptions,
     _grid_sources,
+    is_output_dir,
     process_batch,
     process_video,
     resolve_output_dir,
@@ -68,9 +69,58 @@ def test_only_metadata(clip, tmp_path):
     assert "snapshots" not in result.timings
 
 
-def test_audio_only_gets_metadata_and_fingerprint(audio_only, tmp_path):
-    result = process_video(audio_only, tmp_path)
-    assert sorted(p.name for p in result.outputs) == ["audio.fingerprint.json", "audio_info.txt"]
+def test_audio_only_fails_without_writing_anything(audio_only, tmp_path):
+    with pytest.raises(ValueError, match="No video stream"):
+        process_video(audio_only, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_incomplete_fingerprint_fails_and_is_not_written(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import fingerprint
+
+    monkeypatch.setattr(fingerprint, "compute_global_hashes", lambda info, **kwargs: None)
+    options = ProcessOptions(summary=False, thumbnail=False)
+
+    with pytest.raises(fingerprint.IncompleteFingerprintError):
+        process_video(clip, tmp_path, options)
+    assert not (tmp_path / "clip.fingerprint.json").exists()
+
+
+def test_partial_thumbnail_grid_is_logged(clip, tmp_path, monkeypatch, caplog):
+    from videosemanticreducer import pipeline
+
+    real = pipeline.sample_frames
+
+    def lose_first_frame(*args, **kwargs):
+        frames = real(*args, **kwargs)
+        return [None, *frames[1:]]
+
+    monkeypatch.setattr(pipeline, "sample_frames", lose_first_frame)
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+
+    process_video(clip, tmp_path, options)
+
+    assert "has 3/4 cells" in caplog.text
+
+
+def test_is_output_dir(tmp_path):
+    own = tmp_path / "movie_summary"
+    own.mkdir()
+    (own / "movie_info.txt").touch()
+    by_fingerprint = tmp_path / "other_summary"
+    by_fingerprint.mkdir()
+    (by_fingerprint / "other.fingerprint.json").touch()
+    lookalike = tmp_path / "trip_summary"  # a user folder that only shares the suffix
+    lookalike.mkdir()
+    (lookalike / "day1.mp4").touch()
+    plain = tmp_path / "movie"
+    plain.mkdir()
+    (plain / "movie_info.txt").touch()
+
+    assert is_output_dir(own)
+    assert is_output_dir(by_fingerprint)
+    assert not is_output_dir(lookalike)
+    assert not is_output_dir(plain)
 
 
 def test_process_batch_isolates_failures(clip, tmp_path):

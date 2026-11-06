@@ -44,6 +44,25 @@ def test_process_folder_reports_failures(clip, tmp_path):
     assert (tmp_path / "out" / "good_summary" / "good_info.txt").is_file()
 
 
+def test_recursive_process_skips_its_own_outputs(clip, tmp_path):
+    folder = tmp_path / "videos"
+    (folder / "sub").mkdir(parents=True)
+    shutil.copy(clip, folder / "a.mp4")
+    shutil.copy(clip, folder / "sub" / "b.mp4")
+    args = ["process", str(folder), "-r", "-w", "1", "--no-fingerprint", *FAST]
+
+    assert main(args) == 0
+    assert (folder / "a_summary" / "a_summary.mp4").is_file()
+    # A second pass finds the same two videos, not the summary videos it wrote.
+    assert main(args) == 0
+    assert not (folder / "a_summary" / "a_summary_summary").exists()
+    assert not (folder / "sub" / "b_summary" / "b_summary_summary").exists()
+
+
+def test_process_audio_only_fails(audio_only, tmp_path):
+    assert main(["process", str(audio_only), "-o", str(tmp_path / "out")]) == 1
+
+
 def test_process_missing_input(tmp_path):
     assert main(["process", str(tmp_path / "missing.mp4")]) == 1
 
