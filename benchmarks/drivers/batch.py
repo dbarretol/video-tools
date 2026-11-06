@@ -35,20 +35,21 @@ def main() -> int:
     videos = read_manifest(args.manifest)
 
     t = time.perf_counter()
-    if args.app == "vsr":
-        from videosemanticreducer.pipeline import process_batch
+    from videocore import RunOptions, run_task
 
-        def run():
-            return process_batch(videos, args.output_dir, workers=args.workers)
+    if args.app == "vsr":
+        from videosemanticreducer.pipeline import ARCHIVE, ProcessOptions
+
+        task, options = ARCHIVE, ProcessOptions()
     else:
-        from videothumb.common import Mode
-        from videothumb.jobs import process_folder
+        from videothumb.jobs import SheetTask
         from videothumb.sheet import SheetOptions
 
-        def run():
-            return process_folder(
-                videos, Mode.SHEET, SheetOptions(), root=args.output_dir, workers=args.workers
-            )
+        task, options = SheetTask(), SheetOptions()
+    run_options = RunOptions(output=args.output_dir, workers=args.workers, overwrite=True)
+
+    def run():
+        return run_task(task, videos, options, run_options).items
 
     phases: dict[str, float] = {"import": time.perf_counter() - t}
 
@@ -58,7 +59,7 @@ def main() -> int:
 
     failed = [r for r in results if not r.ok]
     for result in failed:
-        print(f"failed: {result.item}: {result.error}", file=sys.stderr)
+        print(f"failed: {result.video}: {result.error}", file=sys.stderr)
     print(json.dumps({"phases": phases}))
     return 1 if failed else 0
 
