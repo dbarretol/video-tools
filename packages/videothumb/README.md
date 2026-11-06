@@ -33,9 +33,14 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 | `--config FILE` | Defaults file to use (see below) | see below |
 | `--overwrite` / `--skip-existing` | Replace existing outputs, or leave videos whose sheet or snapshot folder already exists | `--overwrite` |
 | `--dry-run` | Show what would be done for each video, without processing anything | off |
+| `--strict` | Treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1) | off |
 
 With `--folder`, a plan is printed first: videos to process and already done, the length of
 video to process and a rough time estimate.
+
+Each sheet and snapshot is read back after being written. When fewer than 90% of its frames
+could be decoded, the video is reported as DEGRADED (incomplete) instead of succeeded, and the
+command exits with 3.
 
 Options that do not apply to the selected mode, such as `--count` with `--mode sheet`, are
 ignored with a warning.

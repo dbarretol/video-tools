@@ -51,8 +51,14 @@ same stem in the same place, such as `clip.mp4` and `clip.mkv`, get `clip.mp4_su
 A video only counts as archived when its fingerprint is complete, since the fingerprint is what
 later proves that a copy is the same video. The run reports a failure, and writes no fingerprint,
 when the file has no video stream, when no frame could be hashed for the global hashes, or when
-fewer than half of the per-position frames could be hashed. Partial summaries and grids are
-reported as warnings.
+fewer than half of the per-position frames could be hashed.
+
+Every artifact is read back before the manifest is written: the summary video must open and last
+as long as expected, the grid must have the expected size and the fingerprint must load. An
+unreadable artifact fails the video. A summary or grid with fewer than 90% of its frames decoded
+makes the archive DEGRADED: it is kept, its manifest lists the `problems` and is not marked
+complete, so the next run archives the video again. The command then exits with 3, or with 1
+with `--strict`.
 
 ## Default settings
 

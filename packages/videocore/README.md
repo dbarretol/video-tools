@@ -54,6 +54,11 @@ report = execute(planned, on_progress=..., should_cancel=...)
 report.items  # one ItemResult per video, in order: OK, FAILED, SKIPPED, OUTDATED or CANCELLED
 ```
 
+After processing a video, `execute` calls `Task.verify`, which reads the outputs back with the
+helpers of `videocore.verify`: a missing or unreadable output fails the video, an incomplete one
+(fewer than 90% of its frames decoded) makes it DEGRADED. `report.exit_status(strict=...)` gives
+0, 1 or 3.
+
 `plan` writes nothing, so it also serves `--dry-run`. `RunOptions` holds how to run (output root,
 recursion, workers, overwrite); each task keeps its own options for what to produce. When several
 videos run in parallel, `execute` gives each one a single decoder.

@@ -64,7 +64,18 @@ Both tools use the same exit codes, so scripts can tell what happened:
 | 0 | Everything succeeded (videos skipped because their output already exists count as success) |
 | 1 | At least one video failed; for `verify` and `compare`, the videos do not match |
 | 2 | Invalid arguments, a missing input, or an invalid config file; nothing was processed |
+| 3 | Nothing failed, but some outputs are incomplete (DEGRADED); `--strict` turns this into 1 |
 | 130 | Interrupted with Ctrl+C; unfinished files were removed |
+
+Every output is read back right after being written. A video whose outputs are written but
+incomplete, for example a contact sheet where fewer than 90% of the thumbnails could be decoded,
+is reported as DEGRADED. A script that only accepts complete results can check for it:
+
+```powershell
+videothumb --folder D:\Videos --mode sheet
+if ($LASTEXITCODE -eq 3) { Write-Warning "some sheets are incomplete" }
+elseif ($LASTEXITCODE -ne 0) { throw "videothumb failed ($LASTEXITCODE)" }
+```
 
 ## Performance
 
