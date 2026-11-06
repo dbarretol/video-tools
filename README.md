@@ -5,7 +5,7 @@ Python tools for previewing and archiving video files, built on [PyAV](https://p
 
 | Tool | What it does |
 |---|---|
-| [**videothumb**](packages/videothumb) | Contact sheets (a grid of thumbnails under a metadata header) and individual snapshots, for one video or a whole folder. Desktop app and command line. |
+| [**videothumb**](packages/videothumb) | Contact sheets (a grid of frames under the video's details) and folders of full-size frames, for any number of videos and folders. Desktop app and command line. |
 | [**videosemanticreducer**](packages/videosemanticreducer) | Archives videos before you delete them: a short summary video, a thumbnail grid, a metadata report and a perceptual fingerprint that can later tell whether another file is the same video. Command line. |
 
 Both share [**videocore**](packages/videocore), a small library for probing videos, sampling frames,
@@ -41,12 +41,12 @@ uv run videosemanticreducer --help
 ## Quick start
 
 ```bash
-# Open the videothumb desktop app
-videothumb
+# Contact sheet of one video, 15 frames of every video in a folder
+videothumb sheet movie.mp4
+videothumb frames ./videos --count 15
 
-# Contact sheet of one video, snapshots of every video in a folder
-videothumb --video movie.mp4 --mode sheet
-videothumb --folder ./videos --mode snapshots --count 15
+# Open the videothumb desktop app
+videothumb gui
 
 # Archive a video: movie_summary/ with summary video, grid, report and fingerprint
 videosemanticreducer process movie.mp4
@@ -82,7 +82,8 @@ console:
 
 ## Choosing the videos
 
-`videosemanticreducer process`, `fingerprint` and `status` take any number of `PATH` arguments:
+`videothumb sheet` and `frames`, and `videosemanticreducer process`, `fingerprint` and `status`
+take any number of `PATH` arguments:
 videos, folders (their videos; subfolders too with `-r`) and patterns such as `D:\Videos\*.mkv`,
 which are expanded by the tool because the Windows shell does not. A path that exists is used as
 it is, so names with brackets such as `clip [1080p].mp4` work; only a path that does not exist is
@@ -128,7 +129,7 @@ incomplete, for example a contact sheet where fewer than 90% of the thumbnails c
 is reported as DEGRADED. A script that only accepts complete results can check for it:
 
 ```powershell
-videothumb --folder D:\Videos --mode sheet
+videothumb sheet D:\Videos
 if ($LASTEXITCODE -eq 3) { Write-Warning "some sheets are incomplete" }
 elseif ($LASTEXITCODE -ne 0) { throw "videothumb failed ($LASTEXITCODE)" }
 ```
@@ -164,7 +165,7 @@ Folders are processed in parallel processes; one failing file never stops the re
 packages/
   videocore/              shared library (probe, frame sampling, grids, batch, logging)
   videoconsole/           terminal output of the command lines (rich): progress and reports
-  videothumb/             contact sheets and snapshots: CLI + tkinter desktop app
+  videothumb/             contact sheets and frames: CLI + tkinter desktop app
   videosemanticreducer/   archive pipeline, fingerprints, compare/verify
 benchmarks/               timing harness (bench.py) and drivers for the tools
 ```
