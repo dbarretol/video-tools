@@ -191,3 +191,24 @@ def test_local_files_are_not_offline(tmp_path):
 def test_run_options_are_validated():
     with pytest.raises(ValueError, match="workers must be greater than 0"):
         RunOptions(workers=0)
+
+
+def test_items_stopped_from_inside_are_cancelled(videos):
+    from videocore import CancelToken, progress
+
+    token = CancelToken()
+
+    @dataclass
+    class Stoppable(FakeTask):
+        def run(self, video, output, name, options, decoders):
+            token.cancel()
+            progress.check_cancelled()
+
+    events = []
+    report = execute(
+        plan(Stoppable(), videos, Options(), RunOptions(workers=1)),
+        on_event=events.append,
+        should_cancel=token,
+    )
+    assert [r.status for r in report.items] == [Status.CANCELLED] * 3
+    assert [e.item for e in events] == [videos[0]]  # the others never started

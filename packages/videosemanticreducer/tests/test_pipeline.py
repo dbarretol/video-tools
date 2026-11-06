@@ -361,3 +361,38 @@ def test_invalid_options(kwargs):
 
 def _small_grid():
     return {"thumb_cols": 2, "thumb_rows": 2}
+
+
+def test_archive_reports_its_stages(clip, tmp_path):
+    events = []
+    report = archive([clip], tmp_path / "out", on_event=events.append)
+
+    assert report.items[0].status is Status.OK
+    stages = list(dict.fromkeys(e.stage for e in events if e.kind == "stage"))
+    for expected in ("probe", "snapshots", "thumbnail", "global_hashes", "keyframe_hashes"):
+        assert expected in stages
+    assert stages.index("probe") < stages.index("snapshots") < stages.index("global_hashes")
+    assert stages[-1] == "manifest"
+    snapshots = [e for e in events if e.stage == "snapshots" and e.total]
+    assert snapshots[-1].done == snapshots[-1].total == SMALL.num_snapshots
+    assert any(e.stage == "sha256" and e.done == e.total for e in events)
+
+
+def test_cancelled_archive_leaves_no_partial_or_complete_record(clip, tmp_path, monkeypatch):
+    from videocore import CancelToken, progress
+
+    monkeypatch.setattr(progress, "STAGE_INTERVAL_SECONDS", 0.0)  # an event per snapshot
+    token = CancelToken()
+
+    def on_event(event):
+        if event.stage == "snapshots" and event.done >= 3:
+            token.cancel()
+
+    out = tmp_path / "out"
+    report = archive([clip], out, on_event=on_event, should_cancel=token)
+
+    assert report.items[0].status is Status.CANCELLED
+    folder = out / "clip_summary"
+    assert not list(folder.glob("*.part"))
+    assert not (folder / "clip_summary.mp4").exists()
+    assert not (folder / "clip.archive.json").exists()  # never looks archived

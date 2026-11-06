@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from videocore import find_videos, run_parallel
+from videocore import batch, find_videos, run_parallel
 
 
 def test_find_videos_filters_and_sorts(tmp_path):
@@ -143,8 +143,10 @@ def _cancel_after(seconds):
     return lambda: time.monotonic() - start > seconds
 
 
-def test_cancelling_stops_running_workers_promptly():
-    # time.sleep is a picklable builtin: each item keeps a worker busy for 30 s.
+def test_cancelling_stops_running_workers_promptly(monkeypatch):
+    # time.sleep is a picklable builtin that never checks for cancellation, so the
+    # workers are killed once the grace period is over.
+    monkeypatch.setattr(batch, "CANCEL_GRACE_SECONDS", 0.5)
     start = time.monotonic()
     results = run_parallel(time.sleep, [30, 30, 30], workers=2, should_cancel=_cancel_after(1))
     assert results == []
@@ -153,7 +155,9 @@ def test_cancelling_stops_running_workers_promptly():
     assert multiprocessing.active_children() == []
 
 
-def test_interruption_stops_running_workers():
+def test_interruption_stops_running_workers(monkeypatch):
+    monkeypatch.setattr(batch, "CANCEL_GRACE_SECONDS", 0.5)
+
     def interrupt():
         if time.monotonic() - start > 1:
             raise RuntimeError("interrupted")  # stands in for KeyboardInterrupt
