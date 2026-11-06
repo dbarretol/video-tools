@@ -101,7 +101,7 @@ def test_outputs_have_no_part_files_left(clip, tmp_path):
 
 def test_old_mode_name_still_reads():
     assert Mode("snapshots") is Mode.FRAMES is Mode.SNAPSHOTS
-    assert [mode.value for mode in Mode] == ["sheet", "frames"]
+    assert [mode.value for mode in Mode] == ["sheet", "frames", "pack"]
 
 
 def test_has_output(tmp_path):

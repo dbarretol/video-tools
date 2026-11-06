@@ -63,7 +63,7 @@ def test_config_commands(clip, tmp_path, capsys):
     assert "not created yet" in capsys.readouterr().out
 
     assert cli.main(["config", "set", "sheet.columns", "2"]) == 0
-    assert cli.main(["config", "set", "rows", "2"]) == 0
+    assert cli.main(["config", "set", "sheet.rows", "2"]) == 0
     assert cli.main(["config", "set", "jpeg_quality", "80"]) == 2  # in two sections
     assert "use one of sheet.jpeg_quality, frames.jpeg_quality" in capsys.readouterr().err
 
