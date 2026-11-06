@@ -1,7 +1,7 @@
 [project]
 name = "videothumb"
 version = "0.1.0"
-description = "Generate contact sheets and individual snapshots from videos (GUI and CLI)."
+description = "Contact sheets, frames and ZIP packs from videos (CLI and desktop app)."
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 videothumb = "videothumb.cli:main"
+vthumb = "videothumb.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
