@@ -49,6 +49,15 @@ def test_input_lists(files):
     assert warnings == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="backslashes are separators on Windows")
+def test_lists_written_on_windows_work_elsewhere(files):
+    (files / "odd\\name.mp4").write_bytes(b"x")  # a real name with a backslash wins
+    listing = files / "list.txt"
+    listing.write_text("sub\\b.mkv\nodd\\name.mp4\nsub\\missing.mp4\n", encoding="utf-8")
+    paths, _ = read_input_list(listing)
+    assert paths == [files / "sub/b.mkv", files / "odd\\name.mp4", files / "sub/missing.mp4"]
+
+
 def test_standard_input_is_relative_to_the_current_folder(files, monkeypatch):
     monkeypatch.chdir(files)
     paths, warnings = read_input_list("-", stdin=io.StringIO(f"a.mp4\nbad{BAD}name.mp4\n"))

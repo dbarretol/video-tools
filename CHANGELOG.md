@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `--input-list` outside Windows: paths written with backslashes, as in a list made on Windows,
+  are found too.
+
+### Development
+
+- Continuous integration on GitHub Actions for every pull request and every push to `dev` or
+  `main`: the lock file must be current, ruff lint and format must pass, and the tests run on
+  Windows and Linux. Dependabot keeps the actions up to date.
+
 ## 0.2.0 - 2026-11-06
 
 Breaking changes; the old forms keep working for one version, with a warning that shows the new
