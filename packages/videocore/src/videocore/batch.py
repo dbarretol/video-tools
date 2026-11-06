@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import os
+import signal
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from contextlib import contextmanager
@@ -32,6 +33,10 @@ class BatchResult:
     ok: bool
     value: Any = None
     error: str | None = None
+    skipped: bool = False
+    """Not processed because its outputs already existed; `ok` is True."""
+    detail: str | None = None
+    """Why it was skipped, for apps that tell cases apart (e.g. ``"outdated"``)."""
 
 
 def find_videos(
@@ -185,23 +190,28 @@ def _stop_workers(pool: ProcessPoolExecutor) -> None:
 @contextmanager
 def _forward_worker_logs(
     context: multiprocessing.context.SpawnContext,
-) -> Iterator[tuple[Callable[..., None] | None, tuple[Any, ...]]]:
+) -> Iterator[tuple[Callable[..., None], tuple[Any, ...]]]:
     """Yield a pool initializer that sends worker log records to this process's handlers."""
     root = logging.getLogger()
     if not root.handlers:
-        yield None, ()
+        yield _init_worker, (None, root.level)
         return
     log_queue = context.Queue()
     listener = QueueListener(log_queue, *root.handlers, respect_handler_level=True)
     listener.start()
     try:
-        yield _init_worker_logging, (log_queue, root.level)
+        yield _init_worker, (log_queue, root.level)
     finally:
         listener.stop()
         log_queue.close()
 
 
-def _init_worker_logging(log_queue: Any, level: int) -> None:
+def _init_worker(log_queue: Any, level: int) -> None:
+    # Ctrl+C reaches every process attached to the console. Workers ignore it so
+    # the main process alone handles it: it terminates them and cleans up.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if log_queue is None:
+        return
     root = logging.getLogger()
     for handler in list(root.handlers):
         root.removeHandler(handler)

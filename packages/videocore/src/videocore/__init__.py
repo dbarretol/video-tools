@@ -3,7 +3,14 @@
 from importlib.metadata import version
 
 from videocore.batch import BatchResult, default_workers, find_videos, run_parallel
-from videocore.errors import VideoOpenError
+from videocore.errors import (
+    EXIT_FAILED,
+    EXIT_INTERRUPTED,
+    EXIT_OK,
+    EXIT_USAGE,
+    UsageError,
+    VideoOpenError,
+)
 from videocore.frames import evenly_spaced, iter_frames, sample_frames
 from videocore.grid import compose_grid
 from videocore.logging_setup import configure_logging, default_log_dir
@@ -21,10 +28,15 @@ from videocore.probe import AudioStreamInfo, VideoInfo, VideoStreamInfo, format_
 __version__ = version("videocore")
 
 __all__ = [
+    "EXIT_FAILED",
+    "EXIT_INTERRUPTED",
+    "EXIT_OK",
+    "EXIT_USAGE",
     "AudioStreamInfo",
     "BatchResult",
     "OutputCollisionError",
     "OutputSlot",
+    "UsageError",
     "VideoInfo",
     "VideoOpenError",
     "VideoStreamInfo",

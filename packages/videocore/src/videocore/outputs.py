@@ -23,12 +23,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from videocore.errors import UsageError
+
 logger = logging.getLogger(__name__)
 
 PART_SUFFIX = ".part"
 
 
-class OutputCollisionError(ValueError):
+class OutputCollisionError(UsageError):
     """Two videos of a batch would still write the same outputs."""
 
 
