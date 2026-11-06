@@ -10,6 +10,7 @@ import signal
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
 from dataclasses import dataclass
 from logging.handlers import QueueHandler, QueueListener
@@ -154,6 +155,10 @@ def run_parallel(
     is handled the same way and then propagates. Dropped and killed items are
     left out of the results; their outputs may be incomplete.
 
+    A worker process that dies does not abort the run: the items that were
+    running are retried one at a time, and the one whose process dies again
+    fails with ``error_type="BrokenProcessPool"`` (see `WORKER_LOST_HINT`).
+
     Log records emitted in worker processes are forwarded to the handlers of
     this process's root logger, so they end up in the same log file and console.
     """
@@ -188,6 +193,7 @@ def run_parallel(
     context = multiprocessing.get_context("spawn")
     events = context.Queue()
     cancel = context.Event()
+    started: set[Path] = set()
 
     def deliver_events() -> None:
         while True:
@@ -195,39 +201,89 @@ def run_parallel(
                 event = events.get_nowait()
             except queue.Empty:
                 return
+            if event.kind == "started":
+                started.add(event.item)
             if on_event is not None:
                 on_event(event)
 
-    with (
-        _forward_worker_logs(context, events, cancel) as (initializer, initargs),
-        ProcessPoolExecutor(
-            max_workers=min(workers, total),
+    def run_pool(indices: list[int], size: int, initializer: Any, initargs: Any) -> list[int]:
+        """Run the items at `indices` on `size` workers; return those lost to a dead worker."""
+        lost = []
+        started.clear()
+        with ProcessPoolExecutor(
+            max_workers=min(size, len(indices)),
             mp_context=context,
             initializer=initializer,
             initargs=initargs,
-        ) as pool,
-    ):
-        futures: dict[Future[BatchResult], int] = {
-            pool.submit(_call, fn, *args): index for index, args in enumerate(calls)
-        }
-        pending = set(futures)
-        try:
-            while pending:
-                done, pending = wait(
-                    pending, timeout=CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
-                )
+        ) as pool:
+            futures: dict[Future[BatchResult], int] = {
+                pool.submit(_call, fn, *calls[index]): index for index in indices
+            }
+            pending = set(futures)
+            try:
+                while pending:
+                    done, pending = wait(
+                        pending, timeout=CANCEL_POLL_SECONDS, return_when=FIRST_COMPLETED
+                    )
+                    deliver_events()
+                    for future in done:
+                        try:
+                            result = future.result()
+                        except BrokenProcessPool:
+                            lost.append(futures[future])
+                        else:
+                            record(futures[future], result)
+                    if pending and should_cancel is not None and should_cancel():
+                        logger.info("Cancelled: stopping %d unfinished items", len(pending))
+                        break
+            finally:
+                if pending and _wind_down(futures, pending, cancel, record):
+                    _stop_workers(pool)
                 deliver_events()
-                for future in done:
-                    record(futures[future], future.result())
-                if pending and should_cancel is not None and should_cancel():
-                    logger.info("Cancelled: stopping %d unfinished items", len(pending))
-                    break
-        finally:
-            if pending and _wind_down(futures, pending, cancel, record):
-                _stop_workers(pool)
-            deliver_events()
+        return sorted(lost)
+
+    # A worker that dies (killed, out of memory, a crash in a decoder) breaks the
+    # whole pool and every unfinished item comes back. Those not started run again
+    # in a new pool; those that were running are suspects and run again one at a
+    # time, so only the item that really kills its process fails. Every round
+    # finishes or fails at least one item, so this ends.
+    with _forward_worker_logs(context, events, cancel) as (initializer, initargs):
+        todo, suspects = list(range(total)), []
+        while (todo or suspects) and not cancel.is_set():
+            if suspects:
+                lost = run_pool(suspects, 1, initializer, initargs)
+                crashed = [index for index in lost if items[index] in started] or lost[:1]
+                for index in crashed:
+                    record(index, _worker_lost(items[index]))
+                suspects = [index for index in lost if index not in crashed]
+                continue
+            lost = run_pool(todo, workers, initializer, initargs)
+            suspects = [index for index in lost if items[index] in started] or lost
+            todo = [index for index in lost if index not in suspects]
+            if lost:
+                logger.warning(
+                    "A worker process stopped unexpectedly; retrying %d %s one at a time",
+                    len(suspects),
+                    "video" if len(suspects) == 1 else "videos",
+                )
     events.close()
     return [results[i] for i in sorted(results)]
+
+
+WORKER_LOST_HINT = (
+    "the process working on it was ended from outside or ran out of memory; run it again, "
+    "with fewer videos in parallel (-w) if memory is short"
+)
+
+
+def _worker_lost(item: Path) -> BatchResult:
+    return BatchResult(
+        item=item,
+        ok=False,
+        error="Its worker process stopped unexpectedly",
+        error_type="BrokenProcessPool",
+        hint=WORKER_LOST_HINT,
+    )
 
 
 def _wind_down(

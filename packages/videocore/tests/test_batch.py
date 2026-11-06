@@ -1,6 +1,7 @@
 import ctypes
 import logging
 import multiprocessing
+import operator
 import os
 import sys
 import time
@@ -168,3 +169,40 @@ def test_interruption_stops_running_workers(monkeypatch):
         run_parallel(time.sleep, [30, 30], workers=2, should_cancel=interrupt)
     assert time.monotonic() - start < 15
     assert multiprocessing.active_children() == []
+
+
+def _die_once(item):
+    # Module-level so spawned workers can import it. The first call for "a" kills
+    # its own process, like a worker ended from the Task Manager or out of memory.
+    marker = item.parent / "died"
+    if item.name == "a" and not marker.exists():
+        marker.touch()
+        os._exit(1)
+    time.sleep(0.5)
+    return item.name
+
+
+def test_a_dead_worker_does_not_abort_the_batch(tmp_path):
+    items = [tmp_path / name for name in ("a", "b", "c", "d")]
+    results = run_parallel(_die_once, items, workers=2)
+    # The videos that were running are retried, so a worker killed once costs nothing.
+    assert [(r.item.name, r.ok, r.value) for r in results] == [
+        ("a", True, "a"),
+        ("b", True, "b"),
+        ("c", True, "c"),
+        ("d", True, "d"),
+    ]
+    assert multiprocessing.active_children() == []
+
+
+def test_the_video_that_kills_its_worker_fails_alone():
+    # operator.call(f, x) is f(x): os._exit(3) dies every time, the sleeps finish.
+    results = run_parallel(
+        operator.call, [os._exit, time.sleep, time.sleep], item_args=[3, 0.5, 0.5], workers=2
+    )
+    assert [(r.ok, r.error_type) for r in results] == [
+        (False, "BrokenProcessPool"),
+        (True, None),
+        (True, None),
+    ]
+    assert results[0].hint == batch.WORKER_LOST_HINT
