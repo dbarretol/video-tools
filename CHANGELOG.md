@@ -26,6 +26,8 @@ command.
 ### Both tools
 
 - Short names: `vthumb` (videothumb) and `vsr` (videosemanticreducer).
+- Help: `help` and `help COMMAND`, and `/?`, `-?` and `/help` as well as `--help`. The help of
+  each tool ends with examples.
 - Paths without a command run the default task: `sheet` and `archive`, or `console.default_task`
   of the config file.
 
