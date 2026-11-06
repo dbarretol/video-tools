@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TextIO
 
 from videocore.batch import find_videos
-from videocore.errors import UsageError
+from videocore.errors import LONG_PATH_HINT, UsageError, too_long
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,9 @@ def expand_path(text: str | os.PathLike[str]) -> list[Path]:
             return matches
         raise UsageError(f"No files match {text}")
     hint = ""
-    if path.suffix.lower() in LIST_SUFFIXES:
+    if too_long(path):
+        hint = f"; {LONG_PATH_HINT}"
+    elif path.suffix.lower() in LIST_SUFFIXES:
         hint = " (to read a list of videos from a text file, use --input-list)"
     raise UsageError(f"Not found: {text}{hint}")
 

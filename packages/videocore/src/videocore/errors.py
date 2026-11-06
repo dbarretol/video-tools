@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import errno
+import os
+import sys
 
 _CLOUD_HINT = (
     "the file is only in OneDrive (or another cloud folder) and could not be downloaded; "
     "check that OneDrive is running and online, or choose 'Always keep on this device'"
 )
+
+
+MAX_PATH = 260
+"""Longest path Windows accepts unless long paths are enabled in the system."""
+LONG_PATH_HINT = (
+    f"the path is longer than Windows allows ({MAX_PATH} characters); move the videos to a "
+    "shorter folder, choose a shorter output folder with -o, or enable long paths in Windows"
+)
+
+
+def too_long(path: str | os.PathLike[str] | None) -> bool:
+    """Whether `path` is too long for Windows without long paths (always False elsewhere)."""
+    if path is None or sys.platform != "win32":
+        return False
+    return len(os.path.abspath(os.fsdecode(path))) >= MAX_PATH
 
 
 class VideoOpenError(OSError):
@@ -88,6 +105,8 @@ def _hint_of(exc: BaseException) -> str | None:
         return _CLOUD_HINT
     if exc.errno == errno.ENOSPC or winerror in _DISK_FULL_WINERRORS:
         return "the disk is full; free some space or choose another output folder with -o"
+    if too_long(exc.filename) or too_long(exc.filename2):
+        return LONG_PATH_HINT
     if isinstance(exc, FileNotFoundError):
         return "the file or folder was moved, renamed or deleted while the run was going on"
     if isinstance(exc, PermissionError):

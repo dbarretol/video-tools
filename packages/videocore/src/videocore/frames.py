@@ -10,9 +10,11 @@ Two modes:
   the encoder placed keyframes, which matters for perceptual fingerprints.
 
 With ``fallback=True``, keyframe mode re-samples precisely the positions where
-it gave nothing or the same keyframe as the previous position (keyframes far
-apart, as in screen recordings), so every position shows a distinct frame
-while the rest keep the speed of keyframe seeking.
+it gave nothing, the same keyframe as the previous position (keyframes far
+apart, as in screen recordings) or a keyframe far behind it, so every position
+shows a distinct frame while the rest keep the speed of keyframe seeking.
+Positions past the end of the data (a cut file whose header promises more)
+come back as None instead of repeating the last frame.
 
 ``draft=True`` trades image quality for speed: the decoder skips the deblocking
 filter and, in precise mode, frames no other frame depends on (most B-frames),
@@ -51,6 +53,10 @@ logger = logging.getLogger(__name__)
 MAX_KEYFRAME_WORKERS = 4
 # Frames each parallel container may decode ahead of the consumer.
 READ_AHEAD_PER_WORKER = 2
+END_TOLERANCE_SECONDS = 1.0
+"""How far past the last decodable frame a precise timestamp may be and still get it."""
+FAR_KEYFRAME_SECONDS = 10.0
+"""With fallback, keyframes further than this before their timestamp are decoded precisely."""
 
 
 def evenly_spaced(start: float, stop: float, count: int, *, endpoints: bool = True) -> list[float]:
@@ -166,14 +172,19 @@ def _with_fallback(
             for index, image in frames:
                 time = None if image is None else image.info.get("time")
                 repeated = time is not None and time == previous
-                if image is None or repeated:
+                # Far behind the timestamp: a very long GOP, or the data ended (a cut
+                # file) and this is its last keyframe. Decoding precisely tells which.
+                far = time is not None and job.timestamps[index] - time > FAR_KEYFRAME_SECONDS
+                if image is None or repeated or far:
                     if seeker is None:
                         seeker = precise.open()
                     replacement = seeker.frame(index)
                     if replacement is not None:
                         replacement.info["resampled"] = True
                         resampled += 1
-                        image = replacement
+                    # A repeat that cannot be replaced is a gap, not a frame: past the
+                    # end of the data, every position gets the same last keyframe.
+                    image = replacement
                 if time is not None:
                     previous = time
                 yield index, image
@@ -273,7 +284,13 @@ class _Job:
             last = frame
             if frame.time >= ts - frame_period / 2:
                 return frame
-        return last
+        # The data ended first. The last frame stands for a time just past it (the
+        # duration often ends a little after the last frame), not for one far past
+        # it: a cut file (half downloaded) says it lasts longer than its data, and
+        # those positions would all show the same last frame.
+        if last is not None and ts - last.time <= END_TOLERANCE_SECONDS:
+            return last
+        return None
 
 
 class _Seeker:

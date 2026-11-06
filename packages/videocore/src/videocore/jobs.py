@@ -98,8 +98,8 @@ class Task[T](Protocol):
         """The file or folder a planned slot produces (see ``videocore.outputs``)."""
         ...
 
-    def state(self, output: Path, name: str, options: T) -> Status | None:
-        """SKIPPED or OUTDATED when `output` already holds a finished result; else None."""
+    def state(self, video: Path, output: Path, name: str, options: T) -> Status | None:
+        """SKIPPED or OUTDATED when `output` holds a finished result of `video`; else None."""
         ...
 
     def run(self, video: Path, output: Path, name: str, options: T, decoders: int | None) -> Any:
@@ -286,7 +286,7 @@ def plan[T](
 
     items = []
     for video, (output, name) in zip(videos, targets, strict=True):
-        state = None if run.overwrite else task.state(output, name, options)
+        state = None if run.overwrite else task.state(video, output, name, options)
         items.append(PlannedItem(video, output, name, state, offline=is_offline(video)))
     if measure:
         items = _measure(items)
