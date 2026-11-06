@@ -29,6 +29,15 @@ fields with `console.record(...)` and an error with `console.record_error(exc, h
 exit code. Without `json`, `record` and `finish` print nothing. `plan_document` and
 `report_document` give the same data as dictionaries.
 
+`Desktop(app, console, wording, open_output=)` is the Windows side of a run (no-ops elsewhere):
+`with desktop.running(plan):` around `execute` keeps the computer awake (`keep_awake`,
+`SetThreadExecutionState`) and times the run; `desktop.finish(exit_code)` shows a notification
+when it took `notify_after` minutes or more (`notify`: a toast with the optional
+`videoconsole[notify]` extra, else the console window flashes), opens the output folder with
+`open_output`, and when `launched_alone()` (no shell attached to the console: started from the
+Explorer) waits for Enter, offering to open the folder. `ConsoleOptions` is the `console` section
+of a tool's config file; `pause_if_alone()` keeps the window open on invalid arguments.
+
 `Wording` is how a tool names what it does ("archived" rather than "succeeded") and its stages.
 
 ```python

@@ -67,6 +67,19 @@ leaves one line. When the output is redirected, only those lines are printed. Bo
 - `-v/--verbose`: debug messages as well. Without it, log messages only go to the log file, in
   `%LOCALAPPDATA%\<tool>\logs`.
 
+On Windows, while videos are processed the computer does not go to sleep (the screen still turns
+off), and a run that took 5 minutes or more ends with a desktop notification. Started from the
+Explorer (double click, a shortcut, or files dropped on the program), the window stays open at the
+end until Enter is pressed, and typing `O` first opens the output folder; `--open` opens it in any
+case. These are set in the `console` section of each tool's config file:
+
+```yaml
+console:
+  notify_after: 5    # minutes; 0 turns notifications off
+  keep_awake: true
+  pause: true        # wait for Enter when started from the Explorer
+```
+
 Both tools use the same exit codes, so scripts can tell what happened:
 
 | Code | Meaning |

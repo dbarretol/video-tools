@@ -25,7 +25,7 @@ videosemanticreducer status D:/Videos -o D:/Archive --full
 `process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
 `--thumb-cols`/`--thumb-rows` (12x12), `--no-video`, `--no-thumbnail`, `--no-fingerprint`,
 `-r/--recursive`, `-w/--workers`, `-o/--output`, `--skip-existing` (default) / `--overwrite`,
-`--dry-run`.
+`--dry-run`, `--open` (open the output folder when done).
 `-v/--verbose` also shows debug messages, including the stage each video is in, and `-q/--quiet`
 only shows warnings, errors and what to do about them; both work before or after the command
 name. Log messages always go to the log file. In a terminal, `process` shows a progress bar for
@@ -110,7 +110,12 @@ process:
   thumb_cols: 10
   thumb_rows: 10
   output: D:/Archive   # relative paths are relative to the config file
+console:
+  notify_after: 10     # minutes a run must take to end with a notification; 0 = never
 ```
+
+The `console` section also has `keep_awake` and `pause` (see the [main README](../../README.md)).
+Option names are unique across sections, so `config set notify_after 10` works too.
 
 The file is `%APPDATA%\videosemanticreducer\config.yaml` on Windows and
 `$XDG_CONFIG_HOME/videosemanticreducer/config.yaml` elsewhere. Another file can be used with

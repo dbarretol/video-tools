@@ -36,6 +36,7 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 | `--strict` | Treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1) | off |
 | `-q`, `--quiet` | Only show warnings, errors and what to do about them | off |
 | `-v`, `--verbose` | Also show debug messages (they always go to the log file) | off |
+| `--open` | Open the output folder when done | off |
 | `--json` | Write the plan and the results to stdout as one JSON document (messages go to stderr); see the [main README](../../README.md) | off |
 
 With `--folder`, a plan is printed first: videos to process and already done, the length of
@@ -62,8 +63,9 @@ same name, such as `clip.mp4` and `clip.mkv`, their outputs include the extensio
 
 ## Default settings
 
-The defaults of the command line can be kept in a YAML file, with one section per mode and a
-`run` section for folders. Flags given on the command line still take precedence. The desktop app
+The defaults of the command line can be kept in a YAML file, with one section per mode, a
+`run` section for folders and a `console` section (notifications, sleep, the pause when started
+from the Explorer; see the [main README](../../README.md)). Flags given on the command line still take precedence. The desktop app
 does not read this file.
 
 ```bash
