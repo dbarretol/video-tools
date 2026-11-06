@@ -93,7 +93,7 @@ def test_cli_config_init_show_and_path(capsys):
 
     assert main(["config", "init"]) == 0
     assert default_config_path().is_file()
-    assert main(["config", "init"]) == 1  # refuses to overwrite
+    assert main(["config", "init"]) == 2  # refuses to overwrite
     assert main(["config", "init", "--force"]) == 0
     capsys.readouterr()
 
@@ -124,4 +124,10 @@ def test_process_uses_config_and_flags_override_it(clip, tmp_path):
 
 def test_process_with_invalid_config_fails_cleanly(clip, tmp_path):
     config = write(tmp_path / "c.yaml", "process:\n  bogus: 1\n")
-    assert main(["process", str(clip), "--config", str(config)]) == 1
+    assert main(["process", str(clip), "--config", str(config)]) == 2
+
+
+@pytest.mark.parametrize("setting", ["num_snapshots: 0", "workers: 0", "thumb_cols: -2"])
+def test_process_with_out_of_range_config_values_is_a_usage_error(clip, tmp_path, setting):
+    config = write(tmp_path / "c.yaml", f"process:\n  {setting}\n")
+    assert main(["process", str(clip), "--config", str(config)]) == 2

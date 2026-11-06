@@ -4,7 +4,7 @@ import pytest
 
 from videocore import find_videos
 from videothumb.common import Mode
-from videothumb.jobs import batch_output, default_output, process, process_folder
+from videothumb.jobs import batch_output, default_output, has_output, process, process_folder
 from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
 
@@ -97,6 +97,27 @@ def test_outputs_have_no_part_files_left(clip, tmp_path):
     process(video, Mode.SHEET, SHEET)
     process(video, Mode.SNAPSHOTS, SNAPSHOTS)
     assert not list(tmp_path.rglob("*.part"))
+
+
+def test_has_output(tmp_path):
+    sheet, snaps = tmp_path / "a_sheet.jpg", tmp_path / "a"
+    assert not has_output(sheet, Mode.SHEET)
+    sheet.write_bytes(b"x")
+    assert has_output(sheet, Mode.SHEET)
+
+    snaps.mkdir()
+    assert not has_output(snaps, Mode.SNAPSHOTS)  # an empty folder does not count
+    (snaps / "snapshot_001.jpg").write_bytes(b"x")
+    assert has_output(snaps, Mode.SNAPSHOTS)
+
+
+def test_skipped_videos_keep_their_place_in_the_results(folder):
+    (folder / "a_sheet.jpg").write_bytes(b"x")
+    results = process_folder(find_videos(folder), Mode.SHEET, SHEET, workers=1, skip_existing=True)
+
+    assert [r.item.name for r in results] == ["a.mp4", "b.mkv", "broken.mp4"]
+    assert [r.skipped for r in results] == [True, False, False]
+    assert results[0].ok and results[0].value == folder / "a_sheet.jpg"
 
 
 def test_process_folder_can_be_cancelled(folder):

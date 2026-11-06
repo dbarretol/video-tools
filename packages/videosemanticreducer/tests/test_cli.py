@@ -1,3 +1,5 @@
+import dataclasses
+import logging
 import shutil
 
 import pytest
@@ -63,8 +65,96 @@ def test_process_audio_only_fails(audio_only, tmp_path):
     assert main(["process", str(audio_only), "-o", str(tmp_path / "out")]) == 1
 
 
-def test_process_missing_input(tmp_path):
-    assert main(["process", str(tmp_path / "missing.mp4")]) == 1
+def test_process_missing_input_is_a_usage_error(tmp_path):
+    assert main(["process", str(tmp_path / "missing.mp4")]) == 2
+
+
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_verbose_works_before_or_after_the_subcommand(tmp_path, position, monkeypatch):
+    levels = []
+    monkeypatch.setattr(
+        "videosemanticreducer.cli.configure_logging",
+        lambda name, level, console: levels.append(level) or tmp_path / "x.log",
+    )
+    missing = str(tmp_path / "missing.mp4")
+    argv = ["-v", "process", missing] if position == "before" else ["process", missing, "-v"]
+    main(argv)
+    assert levels == [logging.DEBUG]
+
+
+def test_without_verbose_logs_at_info(tmp_path, monkeypatch):
+    levels = []
+    monkeypatch.setattr(
+        "videosemanticreducer.cli.configure_logging",
+        lambda name, level, console: levels.append(level) or tmp_path / "x.log",
+    )
+    main(["process", str(tmp_path / "missing.mp4")])
+    assert levels == [logging.INFO]
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [("-n", "0"), ("-d", "-1"), ("--thumb-cols", "x"), ("--thumb-rows", "0"), ("-w", "0")],
+)
+def test_invalid_option_values_are_rejected(clip, capsys, option, value):
+    with pytest.raises(SystemExit) as exc:
+        main(["process", str(clip), option, value])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "must be greater than 0" in err or "expected" in err
+
+
+def test_complete_archives_are_skipped_unless_overwrite(clip, tmp_path, caplog):
+    out = tmp_path / "out"
+    args = ["process", str(clip), "-o", str(out), "--no-fingerprint", *FAST]
+    assert main(args) == 0
+    first = (out / "clip_thumb.jpg").stat().st_mtime_ns
+
+    caplog.clear()
+    assert main(args) == 0
+    assert "already archived" in caplog.text
+    assert (out / "clip_thumb.jpg").stat().st_mtime_ns == first
+
+    assert main([*args, "--overwrite"]) == 0
+    assert (out / "clip_thumb.jpg").stat().st_mtime_ns != first
+
+
+def test_newly_requested_artifacts_are_not_skipped(clip, tmp_path):
+    out = tmp_path / "out"
+    base = ["process", str(clip), "-o", str(out), *FAST]
+    assert main([*base, "--no-fingerprint"]) == 0
+    assert main(base) == 0  # the fingerprint was not made the first time
+    assert (out / "clip.fingerprint.json").is_file()
+
+
+def test_archives_made_with_other_settings_are_reported_not_redone(clip, tmp_path, caplog):
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    shutil.copy(clip, folder / "a.mp4")
+    base = ["process", str(folder), "-w", "1", "--no-fingerprint", "--no-video"]
+    assert main([*base, "--thumb-cols", "2", "--thumb-rows", "2"]) == 0
+
+    caplog.clear()
+    assert main([*base, "--thumb-cols", "3", "--thumb-rows", "2"]) == 0
+    assert "1 archived with other settings (not redone)" in caplog.text
+    assert "--overwrite" in caplog.text
+
+
+def test_incomplete_archive_is_redone(clip, tmp_path):
+    out = tmp_path / "out"
+    args = ["process", str(clip), "-o", str(out), "--no-fingerprint", *FAST]
+    assert main(args) == 0
+    (out / "clip_thumb.jpg").unlink()  # the manifest no longer matches the folder
+    assert main(args) == 0
+    assert (out / "clip_thumb.jpg").is_file()
+
+
+def test_ctrl_c_exits_with_130(clip, tmp_path, monkeypatch):
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("videosemanticreducer.cli.process_video", interrupted)
+    assert main(["process", str(clip), "-o", str(tmp_path / "out")]) == 130
 
 
 def test_fingerprint_compare_and_verify(clip, tmp_path, capsys):
@@ -85,7 +175,29 @@ def test_fingerprint_compare_and_verify(clip, tmp_path, capsys):
     assert "matches the original" in capsys.readouterr().out
 
 
+def test_verify_and_compare_exit_1_when_the_video_differs(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import cli
+
+    saved = tmp_path / "clip.fingerprint.json"
+    assert main(["fingerprint", str(clip), "-o", str(saved)]) == 0
+    real = cli.compare_fingerprints
+
+    def as_if_different(fp1, fp2):
+        return dataclasses.replace(real(fp1, fp2), match_level="LOW")
+
+    monkeypatch.setattr(cli, "compare_fingerprints", as_if_different)
+    assert main(["verify", str(clip), str(saved)]) == 1
+    assert main(["compare", str(saved), str(saved)]) == 1
+
+
+def test_verify_errors_exit_2(clip, tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}", encoding="utf-8")
+    assert main(["verify", str(clip), str(bad)]) == 2
+    assert main(["verify", str(tmp_path / "missing.mp4"), str(bad)]) == 2
+
+
 def test_compare_invalid_fingerprint(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{}", encoding="utf-8")
-    assert main(["compare", str(bad), str(bad)]) == 1
+    assert main(["compare", str(bad), str(bad)]) == 2

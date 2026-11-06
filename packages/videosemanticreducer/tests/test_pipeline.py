@@ -9,6 +9,7 @@ from videosemanticreducer.pipeline import (
     INFO_CARD_DURATION,
     ProcessOptions,
     _grid_sources,
+    archive_state,
     is_output_dir,
     process_batch,
     process_video,
@@ -126,6 +127,47 @@ def test_batch_removes_part_files_of_cancelled_videos(clip, tmp_path):
 
     assert results == []
     assert not leftover.exists()
+
+
+def test_archive_state(clip, tmp_path):
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    assert archive_state(tmp_path, "clip", options) is None
+    process_video(clip, tmp_path, options)
+
+    assert archive_state(tmp_path, "clip", options) == "complete"
+    other_grid = ProcessOptions(summary=False, fingerprint=False, thumb_cols=3, thumb_rows=2)
+    assert archive_state(tmp_path, "clip", other_grid) == "outdated"
+    # Fewer artifacts than were made is still complete; more is not.
+    only_report = ProcessOptions(
+        summary=False, thumbnail=False, fingerprint=False, thumb_cols=2, thumb_rows=2
+    )
+    assert archive_state(tmp_path, "clip", only_report) == "complete"
+    with_fingerprint = ProcessOptions(summary=False, thumb_cols=2, thumb_rows=2)
+    assert archive_state(tmp_path, "clip", with_fingerprint) is None
+
+
+def test_batch_skips_complete_archives(clip, tmp_path):
+    videos = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    for video in videos:
+        video.write_bytes(clip.read_bytes())
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    process_video(videos[0], tmp_path / "a_summary", options)
+    progress = []
+
+    results = process_batch(
+        videos,
+        None,
+        options,
+        skip_complete=True,
+        workers=1,
+        on_progress=lambda done, total, r: progress.append((done, total)),
+    )
+
+    assert [(r.item.name, r.skipped, r.detail) for r in results] == [
+        ("a.mp4", True, "complete"),
+        ("b.mp4", False, None),
+    ]
+    assert progress == [(1, 1)]
 
 
 def test_summary_has_info_card_then_one_frame_per_snapshot(clip, tmp_path):

@@ -5,7 +5,8 @@ from videocore import configure_logging
 
 def test_writes_to_rotating_file_and_is_idempotent(tmp_path):
     root = logging.getLogger()
-    before = len(root.handlers)
+    # CLI tests that ran earlier may have left their own videocore handler, which is replaced.
+    before = len([h for h in root.handlers if not getattr(h, "_videocore", False)])
 
     log_file = configure_logging("testapp", log_dir=tmp_path)
     configure_logging("testapp", log_dir=tmp_path)
