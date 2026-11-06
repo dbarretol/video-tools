@@ -67,7 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         type=Path,
-        help="output folder (default: <stem>_summary next to each video)",
+        help=(
+            "output folder (default: <stem>_summary next to each video); "
+            "with -r, subfolders are recreated inside it"
+        ),
     )
     process.add_argument(
         "-n", "--num-snapshots", type=int, help=f"default: {BUILTIN.num_snapshots}"
@@ -188,7 +191,14 @@ def cmd_process(args: argparse.Namespace) -> int:
         status = "ok" if result.ok else "FAILED"
         logger.info("[%d/%d] %s: %s", done, total, result.item.name, status)
 
-    results = process_batch(videos, settings.output, options, workers=workers, on_progress=progress)
+    results = process_batch(
+        videos,
+        settings.output,
+        options,
+        source=args.input,
+        workers=workers,
+        on_progress=progress,
+    )
     failed = [r for r in results if not r.ok]
     logger.info("Done: %d/%d videos archived", len(results) - len(failed), len(results))
     for result in failed:

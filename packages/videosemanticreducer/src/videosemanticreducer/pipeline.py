@@ -28,11 +28,13 @@ from PIL import Image
 
 from videocore import (
     BatchResult,
+    OutputSlot,
     VideoInfo,
     compose_grid,
     default_workers,
     evenly_spaced,
     iter_frames,
+    plan_outputs,
     probe,
     run_parallel,
     sample_frames,
@@ -113,8 +115,17 @@ def snapshot_timestamps(duration: float, count: int) -> list[float]:
 
 
 def process_video(
-    video: str | Path, output_dir: str | Path, options: ProcessOptions | None = None
+    video: str | Path,
+    output_dir: str | Path,
+    options: ProcessOptions | None = None,
+    *,
+    name: str | None = None,
 ) -> ProcessResult:
+    """Write the artifacts of `video` into `output_dir`.
+
+    Artifacts are named after `name`, the video's stem by default; batches pass
+    the full file name for videos whose stems collide (see ``videocore.outputs``).
+    """
     options = options or ProcessOptions()
     video, output_dir = Path(video), Path(output_dir)
     result = ProcessResult(video=video, output_dir=output_dir)
@@ -127,7 +138,7 @@ def process_video(
         # Nothing could prove later that a copy matches this file, so it is not archived.
         raise ValueError(f"No video stream in {video}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = video.stem
+    stem = name or video.stem
     result.outputs.append(write_report(info, output_dir / f"{stem}_info.txt"))
     logger.info("Processing %s (%s, %s)", video, info.duration_hms, info.format_name)
 
@@ -140,7 +151,9 @@ def process_video(
                 thumbs = _snapshots_and_thumbs(info, summary_path, options, result)
             if options.thumbnail:
                 with timer("thumbnail"):
-                    result.outputs.append(_write_thumbnail(info, thumbs, output_dir, options))
+                    result.outputs.append(
+                        _write_thumbnail(info, thumbs, output_dir / f"{stem}_thumb.jpg", options)
+                    )
 
         if sha_future is not None:
             with timer("global_hashes"):
@@ -165,30 +178,41 @@ def process_batch(
     output: Path | None,
     options: ProcessOptions | None = None,
     *,
+    source: Path | None = None,
     workers: int | None = None,
     on_progress: Callable[[int, int, BatchResult], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[BatchResult]:
     """Process several videos in parallel processes; one failure does not stop the others.
 
-    Each video gets its own ``<stem>_summary`` folder, inside `output` when given.
-    Successful results carry that folder as their value.
+    Each video gets its own ``<stem>_summary`` folder, next to it or inside `output`.
+    With `source`, the folder that was scanned, its subfolders are recreated inside
+    `output`. Videos whose stems collide in the same place use their full file
+    name instead (``clip.mp4_summary``). Successful results carry the folder as
+    their value. Raises ``videocore.OutputCollisionError`` before processing
+    anything if two videos would still write the same folder.
     """
+    slots = plan_outputs(videos, output=output, source=source)
     options = options or ProcessOptions()
     workers = workers or default_workers()
     if workers > 1:
         # Videos already run in parallel; one decoder per video avoids oversubscription.
         options = dataclasses.replace(options, sampling_workers=1)
-    task = functools.partial(_process_in_batch, output=output, options=options)
+    task = functools.partial(_process_in_batch, options=options)
     return run_parallel(
-        task, videos, workers=workers, on_progress=on_progress, should_cancel=should_cancel
+        task,
+        videos,
+        item_args=slots,
+        workers=workers,
+        on_progress=on_progress,
+        should_cancel=should_cancel,
     )
 
 
-def _process_in_batch(video: Path, *, output: Path | None, options: ProcessOptions) -> Path:
+def _process_in_batch(video: Path, slot: OutputSlot, *, options: ProcessOptions) -> Path:
     # Module-level so it can be pickled into worker processes.
-    out_dir = resolve_output_dir(video, output, batch=True)
-    process_video(video, out_dir, options)
+    out_dir = slot.folder / f"{slot.name}{OUTPUT_DIR_SUFFIX}"
+    process_video(video, out_dir, options, name=slot.name)
     return out_dir
 
 
@@ -258,7 +282,7 @@ def _grid_sources(snapshots: int, cells: int) -> dict[int, list[int]]:
 
 
 def _write_thumbnail(
-    info: VideoInfo, thumbs: list[Image.Image | None], output_dir: Path, options: ProcessOptions
+    info: VideoInfo, thumbs: list[Image.Image | None], path: Path, options: ProcessOptions
 ) -> Path:
     decoded = sum(thumb is not None for thumb in thumbs)
     if decoded == 0:
@@ -273,7 +297,6 @@ def _write_thumbnail(
     assert info.video is not None
     cell_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     grid = compose_grid(thumbs, options.thumb_cols, cell_size=cell_size)
-    path = output_dir / f"{info.path.stem}_thumb.jpg"
     grid.save(path, "JPEG", quality=THUMB_JPEG_QUALITY)
     return path
 
