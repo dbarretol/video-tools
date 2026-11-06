@@ -54,7 +54,8 @@ class Console:
     `quiet` (``-q``) leaves only what needs attention: warnings, errors and
     where to find more. With `json` (``--json``), stdout only receives one JSON
     document, written by `finish`, and every message goes to stderr; the
-    command adds to the document with `record`. Streams default to
+    command adds to the document with `record`. Without `progress`
+    (``--no-progress``) no live progress is drawn. Streams default to
     ``sys.stdout``/``sys.stderr`` at the time of each write.
     """
 
@@ -64,11 +65,13 @@ class Console:
         quiet: bool = False,
         json: bool = False,
         tool: str | None = None,
+        progress: bool = True,
         stdout: IO[str] | None = None,
         stderr: IO[str] | None = None,
     ) -> None:
         self.quiet = quiet
         self.json = json
+        self.progress = progress
         self.document: dict[str, Any] = {"schema": JSON_SCHEMA, "tool": tool}
         self._stdout = stdout
         self.out = _rich_console(stderr if json else stdout, stderr=json)
@@ -98,8 +101,8 @@ class Console:
 
     @property
     def live(self) -> bool:
-        """Whether live progress can be drawn: stderr is a terminal and not quiet."""
-        return not self.quiet and self.err.is_terminal
+        """Whether live progress is drawn: stderr is a terminal, not quiet nor --no-progress."""
+        return self.progress and not self.quiet and self.err.is_terminal
 
     def info(self, text: str, style: str | None = None) -> None:
         """A normal message to stdout; omitted with `quiet`."""
