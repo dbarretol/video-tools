@@ -64,10 +64,63 @@ class Wording:
     """Readable names of the stages a task reports, e.g. ``{"sha256": "file hash"}``."""
 
 
+def plan_document(planned: Plan[Any]) -> dict[str, Any]:
+    """The plan as JSON data: what will happen to each video, and the estimates."""
+    counts = {"pending": len(planned.pending)}
+    counts |= {str(state): planned.count(state) for state in (Status.SKIPPED, Status.OUTDATED)}
+    return {
+        "task": planned.task.name,
+        "source": planned.source,
+        "output": planned.run.output,
+        "videos": len(planned.items),
+        "counts": counts,
+        "workers": planned.workers,
+        "duration_seconds": planned.duration,
+        "eta_seconds": planned.eta(),
+        "items": [
+            {
+                "video": item.video,
+                "output": item.output,
+                "state": str(item.state) if item.state is not None else "pending",
+                "duration_seconds": item.duration,
+                "offline": item.offline,
+            }
+            for item in planned.items
+        ],
+    }
+
+
+def report_document(report: RunReport) -> dict[str, Any]:
+    """The results as JSON data: one entry per planned video, in plan order."""
+    return {
+        "interrupted": report.interrupted,
+        "counts": {str(status): report.count(status) for status in Status},
+        "items": [
+            {
+                "video": item.video,
+                "output": item.output,
+                "status": str(item.status),
+                "seconds": item.seconds,
+                "error": item.error,
+                "error_type": item.error_type,
+                "hint": item.hint,
+                "problems": item.problems,
+            }
+            for item in report.items
+        ],
+    }
+
+
+def record_report(console: Console, report: RunReport) -> None:
+    """Add the results to the ``--json`` document."""
+    console.record(report=report_document(report))
+
+
 def print_plan(
     console: Console, planned: Plan[Any], wording: Wording, *, items: bool = False
 ) -> None:
     """The plan summary (number of videos, estimated time, output); with `items`, every video."""
+    console.record(plan=plan_document(planned))
     for line in planned.summary(redo_hint=wording.redo_hint):
         console.info(line)
     if items:
@@ -85,6 +138,7 @@ class RunProgress:
         self.console = console
         self.planned = planned
         self.wording = wording
+        console.record(plan=plan_document(planned))
         pending = planned.pending
         known = [item.duration for item in pending if item.duration]
         typical = sum(known) / len(known) if known else 1.0
@@ -177,6 +231,7 @@ def print_report(
     console: Console, report: RunReport, wording: Wording, *, log_file: Path | None
 ) -> None:
     """The counts of the run, then what went wrong with each video and how to fix it."""
+    record_report(console, report)
     parts = [f"{report.count(Status.OK)} {wording.done}"]
     if degraded := report.degraded:
         parts.append(f"{len(degraded)} {wording.degraded}")
@@ -214,6 +269,7 @@ def report_run_lists(
     again". Shown even when quiet, since it needs action.
     """
     lists = write_run_lists(report, default_runs_dir(app), title=title)
+    console.record(run_lists={"failed": lists.failed, "pending": lists.pending})
     if lists.failed:
         console.notice(f"Videos to retry are listed in {lists.failed}")
     if lists.pending:

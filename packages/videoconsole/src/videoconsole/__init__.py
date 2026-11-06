@@ -4,15 +4,28 @@
 draws them with rich. The desktop app consumes the same events on its own.
 """
 
-from videoconsole.console import Console, setup_logging
-from videoconsole.run import RunProgress, Wording, print_plan, print_report, report_run_lists
+from videoconsole.console import JSON_SCHEMA, Console, setup_logging
+from videoconsole.run import (
+    RunProgress,
+    Wording,
+    plan_document,
+    print_plan,
+    print_report,
+    record_report,
+    report_document,
+    report_run_lists,
+)
 
 __all__ = [
+    "JSON_SCHEMA",
     "Console",
     "RunProgress",
     "Wording",
+    "plan_document",
     "print_plan",
     "print_report",
+    "record_report",
+    "report_document",
     "report_run_lists",
     "setup_logging",
 ]

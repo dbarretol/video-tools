@@ -7,9 +7,11 @@ output can be searched and redirected.
 
 from __future__ import annotations
 
+import json as json_module
 import logging
+import sys
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 from rich.console import Console as RichConsole
 from rich.logging import RichHandler
@@ -23,6 +25,16 @@ STYLES = {
     "error": "red",
     "dim": "dim",
 }
+
+
+JSON_SCHEMA = 1
+"""Version of the ``--json`` document; raised when a field changes meaning or is removed."""
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
 def _rich_console(file: IO[str] | None, stderr: bool) -> RichConsole:
@@ -40,16 +52,49 @@ class Console:
     """The output of one command-line run.
 
     `quiet` (``-q``) leaves only what needs attention: warnings, errors and
-    where to find more. Streams default to ``sys.stdout``/``sys.stderr`` at the
-    time of each write.
+    where to find more. With `json` (``--json``), stdout only receives one JSON
+    document, written by `finish`, and every message goes to stderr; the
+    command adds to the document with `record`. Streams default to
+    ``sys.stdout``/``sys.stderr`` at the time of each write.
     """
 
     def __init__(
-        self, *, quiet: bool = False, stdout: IO[str] | None = None, stderr: IO[str] | None = None
+        self,
+        *,
+        quiet: bool = False,
+        json: bool = False,
+        tool: str | None = None,
+        stdout: IO[str] | None = None,
+        stderr: IO[str] | None = None,
     ) -> None:
         self.quiet = quiet
-        self.out = _rich_console(stdout, stderr=False)
+        self.json = json
+        self.document: dict[str, Any] = {"schema": JSON_SCHEMA, "tool": tool}
+        self._stdout = stdout
+        self.out = _rich_console(stderr if json else stdout, stderr=json)
         self.err = _rich_console(stderr, stderr=True)
+
+    def record(self, **fields: Any) -> None:
+        """Add `fields` to the JSON document (ignored without `json`)."""
+        self.document.update(fields)
+
+    def record_error(self, exc: BaseException, hint: str | None = None) -> None:
+        """Record the error that stopped the command."""
+        self.record(error={"type": type(exc).__name__, "message": str(exc), "hint": hint})
+
+    def finish(self, exit_code: int, *, log_file: Path | None = None) -> int:
+        """Write the JSON document, with `json`; return `exit_code`.
+
+        The document is ASCII (other characters escaped), so it reads the same
+        whatever the encoding of the console or pipe.
+        """
+        if self.json:
+            document = {**self.document, "exit_code": exit_code, "log_file": log_file}
+            text = json_module.dumps(document, ensure_ascii=True, indent=2, default=_jsonable)
+            stream = self._stdout or sys.stdout
+            stream.write(text + "\n")
+            stream.flush()
+        return exit_code
 
     @property
     def live(self) -> bool:
