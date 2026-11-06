@@ -111,7 +111,11 @@ def test_process_uses_config_and_flags_override_it(clip, tmp_path):
         "  thumb_cols: 2\n  thumb_rows: 2\n",
     )
     assert main(["process", str(clip), "--config", str(config)]) == 0
-    assert sorted(p.name for p in out.iterdir()) == ["clip_info.txt", "clip_thumb.jpg"]
+    assert sorted(p.name for p in out.iterdir()) == [
+        "clip.archive.json",
+        "clip_info.txt",
+        "clip_thumb.jpg",
+    ]
 
     # --fingerprint on the command line beats `fingerprint: false` in the file.
     assert main(["process", str(clip), "--config", str(config), "--fingerprint"]) == 0

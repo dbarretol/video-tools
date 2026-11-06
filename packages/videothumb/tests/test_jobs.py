@@ -76,6 +76,29 @@ def test_recursive_batch_recreates_subfolders_in_the_output(clip, tmp_path):
     assert all(r.value.is_file() for r in results)
 
 
+@pytest.mark.parametrize("mode", [Mode.SHEET, Mode.SNAPSHOTS])
+def test_cancelled_batch_removes_part_files(folder, mode):
+    if mode is Mode.SHEET:
+        leftover = folder / "a_sheet.jpg.part"
+    else:
+        (folder / "a").mkdir()
+        leftover = folder / "a" / "snapshot_002.jpg.part"
+    leftover.write_bytes(b"killed worker")
+    options = SHEET if mode is Mode.SHEET else SNAPSHOTS
+
+    process_folder(find_videos(folder), mode, options, workers=1, should_cancel=lambda: True)
+
+    assert not leftover.exists()
+
+
+def test_outputs_have_no_part_files_left(clip, tmp_path):
+    video = tmp_path / "movie.mp4"
+    video.write_bytes(clip.read_bytes())
+    process(video, Mode.SHEET, SHEET)
+    process(video, Mode.SNAPSHOTS, SNAPSHOTS)
+    assert not list(tmp_path.rglob("*.part"))
+
+
 def test_process_folder_can_be_cancelled(folder):
     results = process_folder(
         find_videos(folder), Mode.SNAPSHOTS, SNAPSHOTS, workers=1, should_cancel=lambda: True

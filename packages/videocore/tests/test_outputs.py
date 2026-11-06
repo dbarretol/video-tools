@@ -3,7 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from videocore import OutputCollisionError, OutputSlot, output_folder, plan_outputs
+from videocore import (
+    OutputCollisionError,
+    OutputSlot,
+    atomic_write,
+    output_folder,
+    part_path,
+    plan_outputs,
+    remove_partials,
+)
 
 
 def test_names_are_stems_when_nothing_collides(tmp_path):
@@ -79,3 +87,35 @@ def test_output_folder(tmp_path):
 
 def test_empty_batch():
     assert plan_outputs([], output=Path("out")) == []
+
+
+def test_atomic_write_renames_when_done(tmp_path):
+    target = tmp_path / "sub" / "sheet.jpg"
+    with atomic_write(target) as part:
+        assert part == tmp_path / "sub" / "sheet.jpg.part"
+        part.write_bytes(b"new")
+        assert not target.exists()
+    assert target.read_bytes() == b"new"
+    assert not part.exists()
+
+
+@pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+def test_atomic_write_keeps_the_old_file_on_error(tmp_path, error):
+    target = tmp_path / "sheet.jpg"
+    target.write_bytes(b"old")
+    with pytest.raises(error), atomic_write(target) as part:
+        part.write_bytes(b"half")
+        raise error
+    assert target.read_bytes() == b"old"
+    assert not part_path(target).exists()
+
+
+def test_remove_partials(tmp_path):
+    for name in ("a.jpg.part", "a.jpg", "b.mp4.part", "notes.txt"):
+        (tmp_path / name).write_bytes(b"x")
+    (tmp_path / "dir.part").mkdir()
+
+    assert remove_partials(tmp_path, prefix="a") == [tmp_path / "a.jpg.part"]
+    assert remove_partials(tmp_path) == [tmp_path / "b.mp4.part"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.jpg", "dir.part", "notes.txt"]
+    assert remove_partials(tmp_path / "missing") == []

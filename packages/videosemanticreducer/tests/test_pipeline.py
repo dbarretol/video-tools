@@ -4,6 +4,7 @@ import av
 import pytest
 from PIL import Image
 
+from videosemanticreducer.manifest import is_complete, read_manifest
 from videosemanticreducer.pipeline import (
     INFO_CARD_DURATION,
     ProcessOptions,
@@ -35,6 +36,96 @@ def test_process_creates_every_artifact(clip, tmp_path):
     ]
     assert all(p.is_file() and p.parent == tmp_path / "out" for p in result.outputs)
     assert {"probe", "snapshots", "thumbnail", "global_hashes", "total"} <= result.timings.keys()
+
+
+def test_manifest_records_a_complete_archive(clip, tmp_path):
+    result = process_video(clip, tmp_path / "out", SMALL)
+
+    assert result.manifest == tmp_path / "out" / "clip.archive.json"
+    manifest = read_manifest(result.manifest)
+    assert manifest["complete"] is True
+    assert manifest["error"] is None
+    assert manifest["source"]["filename"] == "clip.mp4"
+    assert manifest["source"]["size_bytes"] == clip.stat().st_size
+    assert len(manifest["source"]["sha256"]) == 64
+    assert manifest["options"]["num_snapshots"] == 12
+    assert "sampling_workers" not in manifest["options"]
+    listed = {entry["file"]: entry for entry in manifest["outputs"]}
+    assert sorted(listed) == sorted(p.name for p in result.outputs)
+    thumb = tmp_path / "out" / "clip_thumb.jpg"
+    assert listed["clip_thumb.jpg"]["size_bytes"] == thumb.stat().st_size
+    assert is_complete(result.manifest)
+
+
+def test_manifest_records_a_failed_archive(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import fingerprint
+
+    monkeypatch.setattr(fingerprint, "compute_global_hashes", lambda info, **kwargs: None)
+    options = ProcessOptions(summary=False, thumb_cols=2, thumb_rows=2)
+
+    with pytest.raises(fingerprint.IncompleteFingerprintError):
+        process_video(clip, tmp_path, options)
+
+    manifest = read_manifest(tmp_path / "clip.archive.json")
+    assert manifest["complete"] is False
+    assert manifest["error"].startswith("IncompleteFingerprintError")
+    assert [entry["file"] for entry in manifest["outputs"]] == ["clip_info.txt", "clip_thumb.jpg"]
+    assert not is_complete(tmp_path / "clip.archive.json")
+
+
+def test_rerun_replaces_the_previous_manifest(clip, tmp_path, monkeypatch):
+    from videosemanticreducer import pipeline
+
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    process_video(clip, tmp_path, options)
+    assert is_complete(tmp_path / "clip.archive.json")
+
+    def killed(*args, **kwargs):
+        raise KeyboardInterrupt  # not an Exception: no manifest is written at all
+
+    monkeypatch.setattr(pipeline, "_write_artifacts", killed)
+    with pytest.raises(KeyboardInterrupt):
+        process_video(clip, tmp_path, options)
+    assert not (tmp_path / "clip.archive.json").exists()
+
+
+def test_manifest_is_incomplete_when_an_output_changes(clip, tmp_path):
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    result = process_video(clip, tmp_path, options)
+
+    (tmp_path / "clip_thumb.jpg").write_bytes(b"truncated")
+    assert not is_complete(result.manifest)
+    (tmp_path / "clip_thumb.jpg").unlink()
+    assert not is_complete(result.manifest)
+
+
+def test_is_complete_tolerates_bad_manifests(tmp_path):
+    assert not is_complete(tmp_path / "missing.archive.json")
+    (tmp_path / "bad.archive.json").write_text("{not json")
+    assert not is_complete(tmp_path / "bad.archive.json")
+    (tmp_path / "list.archive.json").write_text("[]")
+    assert not is_complete(tmp_path / "list.archive.json")
+
+
+def test_leftover_part_files_are_removed(clip, tmp_path):
+    (tmp_path / "clip_summary.mp4.part").write_bytes(b"killed run")
+    options = ProcessOptions(summary=False, fingerprint=False, thumb_cols=2, thumb_rows=2)
+    process_video(clip, tmp_path, options)
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_batch_removes_part_files_of_cancelled_videos(clip, tmp_path):
+    videos = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    for video in videos:
+        video.write_bytes(clip.read_bytes())
+    leftover = tmp_path / "b_summary" / "b_summary.mp4.part"
+    leftover.parent.mkdir()
+    leftover.write_bytes(b"killed worker")
+
+    results = process_batch(videos, None, SMALL, workers=1, should_cancel=lambda: True)
+
+    assert results == []
+    assert not leftover.exists()
 
 
 def test_summary_has_info_card_then_one_frame_per_snapshot(clip, tmp_path):
@@ -107,6 +198,9 @@ def test_is_output_dir(tmp_path):
     own = tmp_path / "movie_summary"
     own.mkdir()
     (own / "movie_info.txt").touch()
+    by_manifest = tmp_path / "third_summary"
+    by_manifest.mkdir()
+    (by_manifest / "third.archive.json").touch()
     by_fingerprint = tmp_path / "other_summary"
     by_fingerprint.mkdir()
     (by_fingerprint / "other.fingerprint.json").touch()
@@ -118,6 +212,7 @@ def test_is_output_dir(tmp_path):
     (plain / "movie_info.txt").touch()
 
     assert is_output_dir(own)
+    assert is_output_dir(by_manifest)
     assert is_output_dir(by_fingerprint)
     assert not is_output_dir(lookalike)
     assert not is_output_dir(plain)
