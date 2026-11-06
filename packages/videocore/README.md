@@ -66,6 +66,10 @@ helpers of `videocore.verify`: a missing or unreadable output fails the video, a
 (fewer than 90% of its frames decoded) makes it DEGRADED. `report.exit_status(strict=...)` gives
 0, 1 or 3.
 
+On Ctrl+C, `execute` returns the report with `interrupted=True` and the unfinished videos as
+CANCELLED instead of raising. `write_run_lists(report, default_runs_dir(app), title=...)` writes
+the failed and the unfinished videos to text files, one path per line.
+
 `plan` writes nothing, so it also serves `--dry-run`. `RunOptions` holds how to run (output root,
 recursion, workers, overwrite); each task keeps its own options for what to produce. When several
 videos run in parallel, `execute` gives each one a single decoder.
