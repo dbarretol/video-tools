@@ -6,6 +6,7 @@ import logging
 import multiprocessing
 import os
 import signal
+import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from contextlib import contextmanager
@@ -25,6 +26,8 @@ VIDEO_EXTENSIONS = frozenset(
 # stat.FILE_ATTRIBUTE_* exist only on Windows builds of Python.
 _FILE_ATTRIBUTE_HIDDEN = 0x2
 _FILE_ATTRIBUTE_SYSTEM = 0x4
+# Offline, recall on open, recall on data access: set on cloud-only (placeholder) files.
+_FILE_ATTRIBUTES_OFFLINE = 0x1000 | 0x40000 | 0x400000
 
 
 @dataclass
@@ -37,6 +40,10 @@ class BatchResult:
     """Not processed because its outputs already existed; `ok` is True."""
     detail: str | None = None
     """Why it was skipped, for apps that tell cases apart (e.g. ``"outdated"``)."""
+    error_type: str | None = None
+    """Exception class name of a failed item."""
+    seconds: float | None = None
+    """Time spent processing the item."""
 
 
 def find_videos(
@@ -84,6 +91,18 @@ def is_hidden(path: Path) -> bool:
         return True
     attributes = getattr(os.lstat(path), "st_file_attributes", 0)
     return bool(attributes & (_FILE_ATTRIBUTE_HIDDEN | _FILE_ATTRIBUTE_SYSTEM))
+
+
+def is_offline(path: Path) -> bool:
+    """True for files whose data is only in the cloud, such as OneDrive placeholders.
+
+    Reading them makes Windows download them first. Always False elsewhere.
+    """
+    try:
+        attributes = getattr(os.stat(path), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attributes & _FILE_ATTRIBUTES_OFFLINE)
 
 
 def default_workers() -> int:
@@ -220,7 +239,16 @@ def _init_worker(log_queue: Any, level: int) -> None:
 
 
 def _call(fn: Callable[..., Any], item: Path, *args: Any) -> BatchResult:
+    started = time.perf_counter()
     try:
-        return BatchResult(item=item, ok=True, value=fn(item, *args))
+        value = fn(item, *args)
     except Exception as exc:  # noqa: BLE001 - one failing video must not abort the batch
-        return BatchResult(item=item, ok=False, error=f"{type(exc).__name__}: {exc}")
+        logger.debug("Details of the failure of %s", item, exc_info=True)
+        return BatchResult(
+            item=item,
+            ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+            error_type=type(exc).__name__,
+            seconds=time.perf_counter() - started,
+        )
+    return BatchResult(item=item, ok=True, value=value, seconds=time.perf_counter() - started)

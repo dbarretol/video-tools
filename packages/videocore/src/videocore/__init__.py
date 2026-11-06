@@ -13,6 +13,18 @@ from videocore.errors import (
 )
 from videocore.frames import evenly_spaced, iter_frames, sample_frames
 from videocore.grid import compose_grid
+from videocore.jobs import (
+    ItemResult,
+    Plan,
+    PlannedItem,
+    RunOptions,
+    RunReport,
+    Status,
+    Task,
+    execute,
+    plan,
+    run_task,
+)
 from videocore.logging_setup import configure_logging, default_log_dir
 from videocore.outputs import (
     OutputCollisionError,
@@ -34,8 +46,15 @@ __all__ = [
     "EXIT_USAGE",
     "AudioStreamInfo",
     "BatchResult",
+    "ItemResult",
     "OutputCollisionError",
     "OutputSlot",
+    "Plan",
+    "PlannedItem",
+    "RunOptions",
+    "RunReport",
+    "Status",
+    "Task",
     "UsageError",
     "VideoInfo",
     "VideoOpenError",
@@ -46,14 +65,17 @@ __all__ = [
     "default_log_dir",
     "default_workers",
     "evenly_spaced",
+    "execute",
     "find_videos",
     "format_hms",
     "iter_frames",
     "output_folder",
     "part_path",
+    "plan",
     "plan_outputs",
     "probe",
     "remove_partials",
     "run_parallel",
+    "run_task",
     "sample_frames",
 ]
