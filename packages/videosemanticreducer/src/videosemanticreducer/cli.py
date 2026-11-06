@@ -42,6 +42,7 @@ from videocore import (
     probe,
     read_input_list,
 )
+from videocore.commands import configured, with_default_task
 from videocore.config import add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
@@ -49,6 +50,7 @@ from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
 from videosemanticreducer.config import (
     CONFIG,
+    CONSOLE_SECTION,
     ProcessDefaults,
     find_config,
     load_config,
@@ -250,6 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     2 invalid arguments, inputs or config, 130 interrupted with Ctrl+C.
     """
     argv, deprecations = translate_legacy(sys.argv[1:] if argv is None else argv)
+    argv = with_default_task(
+        argv, COMMAND_NAMES, lambda: default_task(argv), global_flags=GLOBAL_FLAGS
+    )
     parser = build_parser()
     try:
         args = parser.parse_args(argv)  # exits with 2 on invalid arguments
@@ -502,6 +507,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         console.info("Only sizes were compared; use --full to also compare SHA-256 hashes.")
     ready = all(check.status is ArchiveStatus.READY for check in checks)
     return EXIT_OK if ready else EXIT_FAILED
+
+
+COMMAND_NAMES = ("archive", "fingerprint", "compare", "verify", "status", "config")
+GLOBAL_FLAGS = ("-v", "--verbose", "-q", "--quiet")
+"""The flags that can come before the command."""
+
+
+def default_task(argv: list[str]) -> str:
+    """The command run when none is given: ``console.default_task`` of the config file."""
+    return configured(CONFIG, argv, CONSOLE_SECTION, "default_task")
 
 
 def translate_legacy(argv: list[str]) -> tuple[list[str], list[str]]:

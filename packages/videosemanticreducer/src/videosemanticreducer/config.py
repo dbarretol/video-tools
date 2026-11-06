@@ -11,22 +11,42 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from videoconsole import ConsoleOptions
 from videocore import RunOptions
 from videocore.config import AppConfig, ConfigError, Section
-from videocore.options import options_of
+from videocore.options import option, options_of, validate
 from videosemanticreducer.pipeline import ProcessOptions
 
 APP_NAME = "videosemanticreducer"
 SECTION = "archive"
 CONSOLE_SECTION = "console"
 
+
+@dataclass(frozen=True)
+class TaskOptions:
+    # `cleanup`, once it exists, must never be the default: it deletes files.
+    default_task: Literal["archive", "fingerprint", "status"] = option(
+        "archive",
+        "what `videosemanticreducer PATH...` does when no command is given",
+        label="Default task",
+        cli=False,
+    )
+
+    def __post_init__(self) -> None:
+        validate(self)
+
+
 CONFIG = AppConfig(
     APP_NAME,
     (
         Section(SECTION, (ProcessOptions, RunOptions)),
-        Section(CONSOLE_SECTION, (ConsoleOptions,), "console window and notifications"),
+        Section(
+            CONSOLE_SECTION,
+            (ConsoleOptions, TaskOptions),
+            "default task, console window and notifications",
+        ),
     ),
     f"{APP_NAME} defaults for the `archive` command.",
 )
@@ -83,7 +103,8 @@ def split_values(values: dict, base: ProcessDefaults | None = None) -> ProcessDe
 
 def load_console_options(path: Path | None) -> ConsoleOptions:
     """The ``console`` section of `path`; built-in defaults when `path` is None."""
-    return ConsoleOptions(**CONFIG.load(path)[CONSOLE_SECTION])
+    values = CONFIG.load(path)[CONSOLE_SECTION]
+    return ConsoleOptions(**CONFIG.section(CONSOLE_SECTION).pick(ConsoleOptions, values))
 
 
 def render_template(defaults: ProcessDefaults | None = None) -> str:
