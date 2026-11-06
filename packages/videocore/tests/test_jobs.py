@@ -321,3 +321,26 @@ def test_run_lists_are_only_written_when_needed_and_old_ones_go(videos, tmp_path
     for day in (1, 2, 3):
         jobs.write_run_lists(failing, folder, title="t", now=datetime(2026, 1, day))
     assert sorted(p.name[:8] for p in folder.iterdir()) == ["20260102", "20260103"]
+
+
+def test_invalid_inputs_are_planned_and_reported_as_failed(videos, tmp_path):
+    from videocore import InvalidInput
+
+    missing = tmp_path / "missing.mp4"
+    planned = plan(FakeTask(), videos[:1], Options(), invalid=[InvalidInput(missing, "not found")])
+    assert planned.summary()[0] == "2 videos: 1 to process, 1 not found"
+    assert planned.item_lines()[1] == f"  [skip, not found] {missing}"
+    report = execute(planned)
+    failed = report.failed[0]
+    assert (failed.video, failed.error) == (missing, "not found")
+    assert "input list" in failed.hint and report.exit_code == 1
+
+
+def test_outputs_mirror_each_video_root(tmp_path):
+    out = tmp_path / "out"
+    a, b = tmp_path / "A" / "x" / "a.mp4", tmp_path / "B" / "b.mp4"
+    roots = [tmp_path / "A", None]
+    run = RunOptions(output=out)
+    planned = plan(FakeTask(), [a, b], Options(), run, source=roots, measure=False)
+    assert [item.output for item in planned.items] == [out / "x" / "a.txt", out / "b.txt"]
+    assert planned.source is None

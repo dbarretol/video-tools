@@ -94,7 +94,7 @@ def test_logs_go_to_the_console_only_with_verbose(tmp_path, monkeypatch, capsys)
     calls = spy_logging(monkeypatch, tmp_path)
     main(["process", str(tmp_path / "missing.mp4")])
     assert calls == [(False, False)]
-    assert capsys.readouterr().err.startswith("Error: Input not found")
+    assert capsys.readouterr().err.startswith("Error: Not found")
 
 
 def test_debug_messages_print_with_verbose(clip, tmp_path, capsys):
@@ -327,3 +327,53 @@ def test_process_open_and_help_pause(clip, tmp_path, monkeypatch):
     assert opened == [out]
     assert main([]) == 0  # double-clicked: the help stays on screen
     assert paused == [True]
+
+
+@pytest.fixture
+def library(clip, tmp_path):
+    for name in ("A/a.mp4", "B/b.mp4", "B/clip [1080p].mp4"):
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        shutil.copy(clip, tmp_path / name)
+    return tmp_path
+
+
+def test_process_many_paths_patterns_and_lists(library, capsys):
+    from videocore import default_runs_dir
+
+    listing = library / "list.txt"
+    listing.write_text('# to archive\n"A/a.mp4"\nB\clip [1080p].mp4\ngone.mp4\n', encoding="utf-8")
+    out = library / "out"
+    args = ["process", str(library / "B" / "b*.mp4"), "--input-list", str(listing), "-o", str(out)]
+    assert main([*args, "-w", "1", "--no-video", "--no-fingerprint", *FAST]) == 1
+    captured = capsys.readouterr()
+    assert "4 videos: 3 to process, 1 not found" in captured.out
+    assert "Done: 3 archived, 1 failed." in captured.out
+    assert "gone.mp4: not found" in captured.err
+    for name in ("a", "b", "clip [1080p]"):
+        assert (out / f"{name}_summary" / f"{name}_info.txt").is_file()
+    (failed,) = default_runs_dir("videosemanticreducer").glob("*_failed.txt")
+    assert str((library / "gone.mp4").resolve()) in failed.read_text(encoding="utf-8-sig")
+
+
+def test_process_needs_an_input(capsys):
+    assert main(["process"]) == 2
+    assert "Give at least one PATH or --input-list FILE" in capsys.readouterr().err
+
+
+def test_fingerprint_many_videos(library, capsys):
+    assert main(["fingerprint", str(library / "B")]) == 0
+    assert (library / "B" / "b.mp4.fingerprint.json").is_file()
+    assert (library / "B" / "clip [1080p].mp4.fingerprint.json").is_file()
+    assert main(["fingerprint", str(library / "B"), "-o", str(library / "x.json")]) == 2
+    assert "give a single video" in capsys.readouterr().err
+
+
+def test_status_reads_input_lists(library, capsys):
+    assert main(["process", str(library / "A" / "a.mp4"), "--no-video", *FAST]) == 0
+    listing = library / "list.txt"
+    listing.write_text("A/a.mp4\ngone.mp4\n", encoding="utf-8")
+    capsys.readouterr()
+    assert main(["status", "--input-list", str(listing)]) == 1
+    out = capsys.readouterr().out
+    assert "READY         a.mp4" in out
+    assert "NOT ARCHIVED  gone.mp4" in out and "not found" in out
