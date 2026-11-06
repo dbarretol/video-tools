@@ -25,7 +25,9 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 
 Folder scans skip hidden files and folders (such as macOS `._movie.mp4` files), and recursive scans
 skip the `<stem>_summary` folders written by earlier runs, so summary videos are never archived
-again.
+again. With `-o` and `-r`, subfolders are recreated inside the output folder. Two videos with the
+same stem in the same place, such as `clip.mp4` and `clip.mkv`, get `clip.mp4_summary/` and
+`clip.mkv_summary/` instead of sharing one folder.
 
 A video only counts as archived when its fingerprint is complete, since the fingerprint is what
 later proves that a copy is the same video. The run reports a failure, and writes no fingerprint,

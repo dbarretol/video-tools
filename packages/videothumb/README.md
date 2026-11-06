@@ -23,7 +23,7 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 |---|---|---|
 | `--video` / `--folder` | One video, or every video in a folder (`-r` for subfolders) | required |
 | `--mode {sheet,snapshots}` | Output type | required |
-| `-o`, `--output` | With `--video`: the sheet file or snapshot folder. With `--folder`: a folder for every output | next to each video |
+| `-o`, `--output` | With `--video`: the sheet file or snapshot folder. With `--folder`: a folder for every output, recreating subfolders with `-r` | next to each video |
 | `--columns`, `--rows` | Contact sheet grid | `5`, `4` |
 | `--thumbnail-width` | Thumbnail width in pixels | `320` |
 | `--count` | Number of snapshots | `10` |
@@ -34,6 +34,10 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 By default frames are taken from the nearest keyframe at or before each position, which is several
 times faster; thumbnails are labeled with the time of the frame actually shown. Use `--precise`
 when exact positions matter.
+
+Folder scans skip hidden files and folders. When two videos would write to the same place under the
+same name, such as `clip.mp4` and `clip.mkv`, their outputs include the extension
+(`clip.mp4_sheet.jpg`, `clip.mkv_snapshots/`) instead of overwriting each other.
 
 Logs and the desktop app's settings are stored in `%LOCALAPPDATA%\videothumb` on Windows and
 `$XDG_STATE_HOME/videothumb` elsewhere.
