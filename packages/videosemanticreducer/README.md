@@ -69,6 +69,13 @@ For `movie.mp4`:
 | `movie_thumb.jpg` | Grid of thumbnails covering the whole video |
 | `movie_info.txt` | Container, stream and tag metadata |
 | `movie.fingerprint.json` | SHA-256, global perceptual hashes and per-position hashes |
+| `movie.archive.json` | Manifest, written last: the source video, the options used and every file above with its size and SHA-256 |
+
+The manifest says `"complete": true` only when every requested file was written. A failed run writes
+it with `"complete": false` and the error, and an interrupted run leaves none, so a folder only
+counts as a finished archive when its manifest says so. Files are written under a temporary
+`.part` name and renamed when finished, so a file with its final name is never truncated; partial
+files left by a cancelled or interrupted run are removed.
 
 ## Fingerprint format
 
