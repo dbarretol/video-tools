@@ -17,6 +17,9 @@ videosemanticreducer process D:/Videos -o D:/Archive --workers 2
 videosemanticreducer fingerprint movie.mp4
 videosemanticreducer compare a.fingerprint.json b.fingerprint.json
 videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
+
+# Before deleting originals: are their archives complete and unchanged?
+videosemanticreducer status D:/Videos -o D:/Archive --full
 ```
 
 `process` options: `-n/--num-snapshots` (150), `-d/--snap-duration` (0.4 s),
@@ -59,6 +62,23 @@ unreadable artifact fails the video. A summary or grid with fewer than 90% of it
 makes the archive DEGRADED: it is kept, its manifest lists the `problems` and is not marked
 complete, so the next run archives the video again. The command then exits with 3, or with 1
 with `--strict`.
+
+## Checking archives before deleting originals
+
+`status PATH...` takes videos, archive folders or folders of videos (`-r` for subfolders; `-o` and
+`--config` as given to `process`) and prints one line per video:
+
+| Status | Meaning |
+|---|---|
+| `READY` | The manifest says the archive is complete, every artifact is there with its size, and the original, if still present, is the video archived. The original can be deleted. |
+| `INCOMPLETE` | Archived, but some artifacts are incomplete; run `process` again |
+| `FAILED` | The archive run failed or did not finish |
+| `CHANGED` | An artifact is missing or was modified, or the original is not the video archived |
+| `NOT ARCHIVED` | No archive was found where `process` would put it |
+
+Archives whose original was already deleted are listed too. `--full` also compares the SHA-256
+of every artifact and of the original with those in the manifest, which reads every file; use it
+before deleting. The exit code is 0 only when every archive is `READY`.
 
 ## Default settings
 
