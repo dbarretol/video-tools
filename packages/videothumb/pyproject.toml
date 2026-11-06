@@ -9,6 +9,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "videoconsole",
     "videocore",
 ]
 
@@ -21,3 +22,4 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 videocore = { workspace = true }
+videoconsole = { workspace = true }

@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "imagehash>=4.3.2",
     "pyyaml>=6.0.3",
+    "videoconsole",
     "videocore",
 ]
 
@@ -23,3 +24,4 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 videocore = { workspace = true }
+videoconsole = { workspace = true }

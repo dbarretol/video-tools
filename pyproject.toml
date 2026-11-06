@@ -15,7 +15,7 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["videocore", "videothumb", "videosemanticreducer"]
+known-first-party = ["videocore", "videoconsole", "videothumb", "videosemanticreducer"]
 
 [tool.pytest.ini_options]
 testpaths = ["packages"]
