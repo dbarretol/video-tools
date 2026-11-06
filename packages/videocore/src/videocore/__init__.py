@@ -37,6 +37,7 @@ from videocore.outputs import (
 )
 from videocore.probe import AudioStreamInfo, VideoInfo, VideoStreamInfo, format_hms, probe
 from videocore.progress import Cancelled, CancelToken, ProgressEvent
+from videocore.state import State
 
 __version__ = version("videocore")
 
@@ -57,6 +58,7 @@ __all__ = [
     "ProgressEvent",
     "RunOptions",
     "RunReport",
+    "State",
     "Status",
     "Task",
     "UsageError",

@@ -33,6 +33,8 @@ from videocore.progress import ProgressEvent
 logger = logging.getLogger(__name__)
 
 PROBE_THREADS = 8
+PARALLEL_GAIN = 0.7
+"""N videos in parallel finish about N**PARALLEL_GAIN times faster than one after another."""
 
 
 class Status(StrEnum):
@@ -133,6 +135,9 @@ class Plan[T]:
     items: tuple[PlannedItem, ...]
     source: Path | None = None
     """The folder that was scanned; paths are shown relative to it."""
+    speed: float = 1.0
+    """How many times longer than `Task.estimate` the task takes on this computer,
+    learned from earlier runs (see ``videocore.state.State.speed``)."""
 
     @property
     def pending(self) -> list[PlannedItem]:
@@ -162,11 +167,11 @@ class Plan[T]:
             estimate = self.task.estimate(item.duration, self.options)
             if estimate is None:
                 return None
-            estimates.append(estimate)
+            estimates.append(estimate * self.speed)
         if not estimates:
             return None
         # Parallel workers share the CPU, so they do not divide the time evenly.
-        return max(max(estimates), sum(estimates) / (self.workers**0.7))
+        return max(max(estimates), sum(estimates) / (self.workers**PARALLEL_GAIN))
 
     def summary(self, *, redo_hint: str = "use --overwrite to redo them") -> list[str]:
         """Lines describing the plan, shown before running it."""
@@ -225,6 +230,7 @@ def plan[T](
     source: Path | None = None,
     outputs: Sequence[Path] | None = None,
     measure: bool = True,
+    speed: float = 1.0,
 ) -> Plan[T]:
     """Decide what to do with each video; nothing is written.
 
@@ -235,6 +241,7 @@ def plan[T](
     Unless ``run.overwrite``, videos whose outputs are already finished are
     marked SKIPPED or OUTDATED (see `Task.state`). With `measure`, the duration
     of each pending video is read, except for files only available in the cloud.
+    `speed` corrects the task's estimates for this computer (see `Plan.speed`).
     """
     run = run or RunOptions()
     if outputs is not None:
@@ -251,7 +258,7 @@ def plan[T](
         items.append(PlannedItem(video, output, name, state, offline=is_offline(video)))
     if measure:
         items = _measure(items)
-    return Plan(task, options, run, tuple(items), source=source)
+    return Plan(task, options, run, tuple(items), source=source, speed=speed)
 
 
 @dataclass
@@ -291,6 +298,26 @@ class RunReport:
     @property
     def exit_code(self) -> int:
         return EXIT_FAILED if self.failed else EXIT_OK
+
+    def measured_speed(self) -> float | None:
+        """How many times longer than `Task.estimate` the processed videos took.
+
+        Only successful videos of known duration count; None when there are none.
+        The time of videos run in parallel is converted to the time of one alone.
+        """
+        planned = {item.video: item for item in self.plan.items}
+        slowdown = self.plan.workers ** (1 - PARALLEL_GAIN)
+        took = expected = 0.0
+        for result in self.items:
+            item = planned[result.video]
+            if result.status is not Status.OK or result.seconds is None or not item.duration:
+                continue
+            estimate = self.plan.task.estimate(item.duration, self.plan.options)
+            if not estimate:
+                continue
+            took += result.seconds / slowdown
+            expected += estimate
+        return took / expected if expected else None
 
 
 def execute[T](

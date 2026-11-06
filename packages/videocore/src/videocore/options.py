@@ -214,8 +214,10 @@ def given_values(cls: type, args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def parse_mapping(classes: type | Iterable[type], data: Mapping[str, Any]) -> dict[str, Any]:
-    """Check config-file values against the options of `classes`.
+def parse_mapping(
+    classes: type | Iterable[type], data: Mapping[str, Any], *, skip: Iterable[str] = ()
+) -> dict[str, Any]:
+    """Check config-file values against the options of `classes`, except those in `skip`.
 
     Returns the values by field name, with paths as `Path` and whole numbers as
     float where a float is expected. Raises ValueError naming the first unknown
@@ -223,7 +225,8 @@ def parse_mapping(classes: type | Iterable[type], data: Mapping[str, Any]) -> di
     """
     if isinstance(classes, type):
         classes = [classes]
-    known = {opt.name: opt for cls in classes for opt in options_of(cls)}
+    skip = set(skip)
+    known = {opt.name: opt for cls in classes for opt in options_of(cls) if opt.name not in skip}
     values = {}
     for key, value in data.items():
         opt = known.get(key)
