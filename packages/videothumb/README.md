@@ -32,6 +32,9 @@ videothumb --folder ./videos --mode sheet -o ./sheets --workers 2
 | `-w`, `--workers` | Videos processed in parallel with `--folder` | half the CPU threads |
 | `--overwrite` / `--skip-existing` | Replace existing outputs, or leave videos whose sheet or snapshot folder already exists | `--overwrite` |
 
+Options that do not apply to the selected mode, such as `--count` with `--mode sheet`, are
+ignored with a warning.
+
 By default frames are taken from the nearest keyframe at or before each position, which is several
 times faster; thumbnails are labeled with the time of the frame actually shown. Use `--precise`
 when exact positions matter.

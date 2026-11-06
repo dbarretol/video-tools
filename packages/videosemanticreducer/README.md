@@ -67,8 +67,9 @@ process:
 
 The file is `%APPDATA%\videosemanticreducer\config.yaml` on Windows and
 `$XDG_CONFIG_HOME/videosemanticreducer/config.yaml` elsewhere. Another file can be used with
-`--config FILE` or the `VIDEOSEMANTICREDUCER_CONFIG` environment variable. Unknown options and
-values of the wrong type are reported as errors.
+`--config FILE` or the `VIDEOSEMANTICREDUCER_CONFIG` environment variable. Unknown options,
+values of the wrong type and values out of range (such as `num_snapshots: 0`) are reported as errors
+that name the file, and nothing is processed.
 
 ## Artifacts
 
