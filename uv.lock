@@ -520,7 +520,7 @@ wheels = [
 
 [[package]]
 name = "videoconsole"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/videoconsole" }
 dependencies = [
     { name = "rich" },
@@ -542,7 +542,7 @@ provides-extras = ["notify"]
 
 [[package]]
 name = "videocore"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/videocore" }
 dependencies = [
     { name = "av" },
@@ -559,7 +559,7 @@ requires-dist = [
 
 [[package]]
 name = "videosemanticreducer"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/videosemanticreducer" }
 dependencies = [
     { name = "imagehash" },
@@ -578,7 +578,7 @@ requires-dist = [
 
 [[package]]
 name = "videothumb"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/videothumb" }
 dependencies = [
     { name = "videoconsole", extra = ["notify"] },
@@ -593,7 +593,7 @@ requires-dist = [
 
 [[package]]
 name = "vtools"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/vtools" }
 dependencies = [
     { name = "videoconsole" },

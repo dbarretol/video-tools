@@ -1,6 +1,6 @@
 [project]
 name = "videothumb"
-version = "0.1.0"
+version = "0.2.0"
 description = "Contact sheets, frames and ZIP packs from videos (CLI and desktop app)."
 readme = "README.md"
 license = "MIT"
