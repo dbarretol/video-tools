@@ -20,11 +20,13 @@ from videocore import (
     Status,
     UsageError,
     configure_logging,
+    default_runs_dir,
     execute,
     find_videos,
     hint_for,
     plan,
     probe,
+    write_run_lists,
 )
 from videocore.config import add_config_commands
 from videocore.options import add_arguments, given_values
@@ -270,7 +272,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         summary += f", {outdated} archived with other settings (not redone)"
     summary += f", {len(failed)} failed"
     if cancelled := report.count(Status.CANCELLED):
-        summary += f", {cancelled} not started"
+        summary += f", {cancelled} not finished"
     logger.info(summary)
     if skipped or outdated:
         logger.info("Use --overwrite to archive the skipped videos again")
@@ -284,6 +286,19 @@ def cmd_process(args: argparse.Namespace) -> int:
         logger.info("Details: %s", args.log_file)
     if degraded:
         logger.info("Incomplete archives are not marked complete; the next run redoes them")
+    if report.interrupted:
+        logger.error("Interrupted; unfinished files were removed")
+    lists = write_run_lists(
+        report, default_runs_dir(APP_NAME), title=f"{APP_NAME} process {args.input}"
+    )
+    if lists.failed:
+        logger.info("Videos to retry are listed in %s", lists.failed)
+    if lists.pending:
+        logger.info(
+            "Unfinished videos are listed in %s; run the same command again to resume "
+            "(archived videos are skipped)",
+            lists.pending,
+        )
     return report.exit_status(strict=args.strict)
 
 
