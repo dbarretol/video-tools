@@ -43,6 +43,24 @@ _STARTF_USESHOWWINDOW = 0x00000001
 _SW_HIDE = 0
 _CLASSIC_CONSOLE = "ConsoleWindowClass"
 """Window class of a conhost console; Windows Terminal uses ``PseudoConsoleWindow``."""
+_TH32CS_SNAPPROCESS = 0x2
+SERVICE_HOSTS = frozenset({"svchost", "taskeng", "taskhostw", "services", "wmiprvse"})
+"""Programs that start others for nobody to watch: the Task Scheduler, services, WMI."""
+
+
+class _ProcessEntry(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
 
 
 class _StartupInfo(ctypes.Structure):
@@ -117,17 +135,65 @@ def console_programs() -> list[str] | None:
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
-    pids = (ctypes.c_uint32 * 64)()
-    count = kernel32.GetConsoleProcessList(pids, len(pids))
-    if not 0 < count <= len(pids):
+    pids = _console_pids(kernel32)
+    if pids is None:
         return None
     names = []
-    for pid in pids[:count]:
+    for pid in pids:
         name = _image_name(kernel32, pid)
         if name is None:
             return None
         names.append(name)
     return names
+
+
+def _console_pids(kernel32: Any) -> list[int] | None:
+    pids = (ctypes.c_uint32 * 64)()
+    count = kernel32.GetConsoleProcessList(pids, len(pids))
+    if not 0 < count <= len(pids):
+        return None
+    return list(pids[:count])
+
+
+def _processes(kernel32: Any) -> dict[int, tuple[int, str]]:
+    """Every running process: pid -> (parent pid, lowercase name without extension)."""
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+    if snapshot is None or snapshot == ctypes.c_void_p(-1).value:
+        return {}
+    handle = ctypes.c_void_p(snapshot)
+    table = {}
+    try:
+        entry = _ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        more = kernel32.Process32FirstW(handle, ctypes.byref(entry))
+        while more:
+            name = Path(entry.szExeFile).stem.lower()
+            table[entry.th32ProcessID] = (entry.th32ParentProcessID, name)
+            more = kernel32.Process32NextW(handle, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(handle)
+    return table
+
+
+def started_by_service() -> bool:
+    """Whether the program that started us is the Task Scheduler or another service.
+
+    Its tasks may show a console window, but nobody is there to press Enter. The
+    programs of this run that share our console (the launcher of the ``.exe``,
+    Python) are skipped to reach the one that started them.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return False
+    ours = set(_console_pids(kernel32) or [])
+    table = _processes(kernel32)
+    pid, seen = os.getpid(), set()
+    while pid in ours and pid in table and pid not in seen:
+        seen.add(pid)
+        pid = table[pid][0]
+    parent = table.get(pid)
+    return parent is not None and parent[1] in SERVICE_HOSTS
 
 
 def _image_name(kernel32: Any, pid: int) -> str | None:
@@ -174,15 +240,16 @@ def launched_alone() -> bool:
     """Whether this console window was opened for us, so it closes when we exit.
 
     True when no shell is attached to the console (started from the Explorer
-    or a shortcut), someone can answer (stdin is a terminal) and the window is
-    not hidden (see `started_hidden`).
+    or a shortcut), someone can answer (stdin is a terminal), the window is
+    not hidden (see `started_hidden`) and no service such as the Task Scheduler
+    started us (see `started_by_service`).
     """
     if sys.stdin is None or not sys.stdin.isatty():
         return False
     programs = console_programs()
     if programs is None or SHELLS.intersection(programs):
         return False
-    return not started_hidden()
+    return not started_hidden() and not started_by_service()
 
 
 def open_folder(folder: Path) -> None:
