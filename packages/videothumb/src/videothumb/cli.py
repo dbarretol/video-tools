@@ -14,8 +14,10 @@ from videoconsole import (
     Console,
     RunProgress,
     Wording,
+    plan_document,
     print_plan,
     print_report,
+    record_report,
     report_run_lists,
     setup_logging,
 )
@@ -44,6 +46,8 @@ from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
 
 logger = logging.getLogger(__name__)
+
+JSON_HELP = "write the plan and the results to stdout as one JSON document; messages go to stderr"
 
 WORDING = Wording(
     verb="Processing",
@@ -130,6 +134,7 @@ def add_verbosity(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="only show warnings, errors and what to do about them",
     )
+    parser.add_argument("--json", action="store_true", help=JSON_HELP)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,8 +149,14 @@ def main(argv: list[str] | None = None) -> int:
         return config_main(argv[1:])
 
     args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
-    console = Console(quiet=args.quiet)
+    console = Console(quiet=args.quiet, json=args.json, tool=APP_NAME)
+    console.record(mode=args.mode)
     args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
+    return console.finish(run(args, console), log_file=args.log_file)
+
+
+def run(args: argparse.Namespace, console: Console) -> int:
+    """Run the parsed command line; errors are reported, not raised."""
     try:
         config_path = CONFIG.find(args.config)
         if config_path is not None:
@@ -159,18 +170,22 @@ def main(argv: list[str] | None = None) -> int:
         if not args.folder.is_dir():
             raise UsageError(f"Folder not found: {args.folder}")
         return run_batch(args, console, mode, options, values)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         logger.info("Interrupted", exc_info=True)
+        console.record_error(exc)
         console.detail("Interrupted; unfinished files were removed.", "warning")
         return EXIT_INTERRUPTED
     except UsageError as exc:
         logger.error("Usage error: %s", exc, exc_info=True)
+        console.record_error(exc)
         console.error(str(exc))
         return EXIT_USAGE
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("Failed: %s", exc, exc_info=True)
+        hint = hint_for(exc)
+        console.record_error(exc, hint)
         console.error(str(exc))
-        console.hint(hint_for(exc), args.log_file)
+        console.hint(hint, args.log_file)
         return EXIT_FAILED
 
 
@@ -239,11 +254,13 @@ def run_single(args: argparse.Namespace, console: Console, mode: Mode, options: 
         print_plan(console, planned, WORDING, items=True)
         return EXIT_OK
     if not planned.pending:
+        console.record(plan=plan_document(planned))
         console.info(f"Skipped: {target} already exists (use --overwrite to replace it)")
         return EXIT_OK
     with RunProgress(console, planned, WORDING) as progress:
         report = execute(planned, on_event=progress.on_event)
     state.learn_speed(task.name, report.measured_speed())
+    record_report(console, report)
     (result,) = report.items
     if result.status is Status.CANCELLED:
         raise KeyboardInterrupt
