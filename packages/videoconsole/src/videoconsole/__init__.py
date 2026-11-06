@@ -5,6 +5,15 @@ draws them with rich. The desktop app consumes the same events on its own.
 """
 
 from videoconsole.console import JSON_SCHEMA, Console, setup_logging
+from videoconsole.desktop import (
+    ConsoleOptions,
+    Desktop,
+    keep_awake,
+    launched_alone,
+    notify,
+    open_folder,
+    pause_if_alone,
+)
 from videoconsole.run import (
     RunProgress,
     Wording,
@@ -14,11 +23,14 @@ from videoconsole.run import (
     record_report,
     report_document,
     report_run_lists,
+    summary_line,
 )
 
 __all__ = [
     "JSON_SCHEMA",
     "Console",
+    "ConsoleOptions",
+    "Desktop",
     "RunProgress",
     "Wording",
     "plan_document",
@@ -27,5 +39,11 @@ __all__ = [
     "record_report",
     "report_document",
     "report_run_lists",
+    "keep_awake",
+    "launched_alone",
+    "notify",
+    "open_folder",
+    "pause_if_alone",
     "setup_logging",
+    "summary_line",
 ]

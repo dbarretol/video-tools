@@ -12,8 +12,11 @@ from pathlib import Path
 
 from videoconsole import (
     Console,
+    ConsoleOptions,
+    Desktop,
     RunProgress,
     Wording,
+    pause_if_alone,
     plan_document,
     print_plan,
     print_report,
@@ -40,7 +43,7 @@ from videocore.config import Values, add_config_commands
 from videocore.options import add_arguments, given_values, options_of
 from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
-from videothumb.config import CONFIG, RUN_SECTION
+from videothumb.config import CONFIG, CONSOLE_SECTION, RUN_SECTION
 from videothumb.jobs import TASKS, Options, default_output
 from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
@@ -135,6 +138,7 @@ def add_verbosity(parser: argparse.ArgumentParser) -> None:
         help="only show warnings, errors and what to do about them",
     )
     parser.add_argument("--json", action="store_true", help=JSON_HELP)
+    parser.add_argument("--open", action="store_true", help="open the output folder when done")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -148,11 +152,17 @@ def main(argv: list[str] | None = None) -> int:
     if argv[0] == "config":
         return config_main(argv[1:])
 
-    args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
+    try:
+        args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
+    except SystemExit:
+        pause_if_alone()  # so that a window opened for us shows the error
+        raise
     console = Console(quiet=args.quiet, json=args.json, tool=APP_NAME)
     console.record(mode=args.mode)
+    args.desktop = Desktop(APP_NAME, console, WORDING, open_output=args.open)
     args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
-    return console.finish(run(args, console), log_file=args.log_file)
+    exit_code = console.finish(run(args, console), log_file=args.log_file)
+    return args.desktop.finish(exit_code)
 
 
 def run(args: argparse.Namespace, console: Console) -> int:
@@ -162,6 +172,7 @@ def run(args: argparse.Namespace, console: Console) -> int:
         if config_path is not None:
             logger.debug("Using defaults from %s", config_path)
         values = CONFIG.load(config_path)
+        args.desktop.configure(ConsoleOptions(**values.get(CONSOLE_SECTION, {})))
         mode, options = Mode(args.mode), build_options(args, values, console)
         if args.video is not None:
             if not args.video.is_file():
@@ -254,11 +265,12 @@ def run_single(args: argparse.Namespace, console: Console, mode: Mode, options: 
         print_plan(console, planned, WORDING, items=True)
         return EXIT_OK
     if not planned.pending:
+        args.desktop.plan = planned
         console.record(plan=plan_document(planned))
         console.info(f"Skipped: {target} already exists (use --overwrite to replace it)")
         return EXIT_OK
-    with RunProgress(console, planned, WORDING) as progress:
-        report = execute(planned, on_event=progress.on_event)
+    with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
+        report = args.desktop.report = execute(planned, on_event=progress.on_event)
     state.learn_speed(task.name, report.measured_speed())
     record_report(console, report)
     (result,) = report.items
@@ -291,8 +303,9 @@ def run_batch(
     if args.dry_run:
         return EXIT_OK
 
-    with RunProgress(console, planned, WORDING) as progress:
+    with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
         report = execute(planned, on_progress=progress.on_progress, on_event=progress.on_event)
+    args.desktop.report = report
     state.learn_speed(task.name, report.measured_speed())
     print_report(console, report, WORDING, log_file=args.log_file)
     title = f"{APP_NAME} --folder {args.folder} --mode {mode}"

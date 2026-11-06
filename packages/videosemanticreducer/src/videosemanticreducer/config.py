@@ -12,6 +12,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from videoconsole import ConsoleOptions
 from videocore import RunOptions
 from videocore.config import AppConfig, ConfigError, Section
 from videocore.options import options_of
@@ -19,10 +20,14 @@ from videosemanticreducer.pipeline import ProcessOptions
 
 APP_NAME = "videosemanticreducer"
 SECTION = "process"
+CONSOLE_SECTION = "console"
 
 CONFIG = AppConfig(
     APP_NAME,
-    (Section(SECTION, (ProcessOptions, RunOptions)),),
+    (
+        Section(SECTION, (ProcessOptions, RunOptions)),
+        Section(CONSOLE_SECTION, (ConsoleOptions,), "console window and notifications"),
+    ),
     f"{APP_NAME} defaults for the `process` command.",
 )
 CONFIG_ENV = CONFIG.env_var
@@ -74,6 +79,11 @@ def split_values(values: dict, base: ProcessDefaults | None = None) -> ProcessDe
         options=dataclasses.replace(base.options, **pick(ProcessOptions)),
         run=dataclasses.replace(base.run, **pick(RunOptions)),
     )
+
+
+def load_console_options(path: Path | None) -> ConsoleOptions:
+    """The ``console`` section of `path`; built-in defaults when `path` is None."""
+    return ConsoleOptions(**CONFIG.load(path)[CONSOLE_SECTION])
 
 
 def render_template(defaults: ProcessDefaults | None = None) -> str:

@@ -11,8 +11,10 @@ from rich.text import Text
 
 from videoconsole import (
     Console,
+    Desktop,
     RunProgress,
     Wording,
+    pause_if_alone,
     plan_document,
     print_plan,
     print_report,
@@ -44,6 +46,7 @@ from videosemanticreducer.config import (
     ProcessDefaults,
     find_config,
     load_config,
+    load_console_options,
     split_values,
 )
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
@@ -118,11 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
     config_option = argparse.ArgumentParser(add_help=False, parents=[common, CONFIG.file_option()])
     json_option = argparse.ArgumentParser(add_help=False)
     json_option.add_argument("--json", action="store_true", help=JSON_HELP)
+    open_option = argparse.ArgumentParser(add_help=False)
+    open_option.add_argument("--open", action="store_true", help="open the output folder when done")
 
     # Option defaults are None so that values from the config file apply unless a flag is given.
     process = commands.add_parser(
         "process",
-        parents=[config_option, json_option],
+        parents=[config_option, json_option, open_option],
         help="archive a video or every video in a folder",
         epilog="Defaults shown are the built-in ones; a config file can change them.",
     )
@@ -229,17 +234,24 @@ def main(argv: list[str] | None = None) -> int:
     2 invalid arguments, inputs or config, 130 interrupted with Ctrl+C.
     """
     parser = build_parser()
-    args = parser.parse_args(argv)  # exits with 2 on invalid arguments
+    try:
+        args = parser.parse_args(argv)  # exits with 2 on invalid arguments
+    except SystemExit:
+        pause_if_alone()  # so that a window opened for us shows the error
+        raise
     if args.command is None:
         parser.print_help()
+        pause_if_alone()
         return EXIT_OK
 
     json = getattr(args, "json", False)
     console = args.console = Console(quiet=args.quiet, json=json, tool=APP_NAME)
     console.record(command=args.command)
+    desktop = Desktop(APP_NAME, console, WORDING, open_output=getattr(args, "open", False))
+    args.desktop = desktop
     log_file = args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
     logger.debug("Logging to %s", log_file)
-    return console.finish(run(args, console), log_file=log_file)
+    return desktop.finish(console.finish(run(args, console), log_file=log_file))
 
 
 def run(args: argparse.Namespace, console: Console) -> int:
@@ -270,6 +282,7 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
     config_path = find_config(args.config)
     if config_path is not None:
         logger.debug("Using defaults from %s", config_path)
+    args.desktop.configure(load_console_options(config_path))
     given = given_values(ProcessOptions, args) | given_values(RunOptions, args)
     try:
         return split_values(given, load_config(config_path))
@@ -293,12 +306,13 @@ def cmd_process(args: argparse.Namespace) -> int:
             print_plan(console, planned, WORDING, items=True)
             return EXIT_OK
         if not planned.pending:
+            args.desktop.plan = planned
             console.record(plan=plan_document(planned))
             how = "already" if planned.items[0].state is Status.SKIPPED else "with other settings"
             console.info(f"{args.input} is {how} archived in {output}; use --overwrite to redo it")
             return EXIT_OK
-        with RunProgress(console, planned, WORDING) as progress:
-            report = execute(planned, on_event=progress.on_event)
+        with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
+            report = args.desktop.report = execute(planned, on_event=progress.on_event)
         state.learn_speed(ARCHIVE.name, report.measured_speed())
         record_report(console, report)
         (result,) = report.items
@@ -327,8 +341,9 @@ def cmd_process(args: argparse.Namespace) -> int:
     if planned.pending:
         console.info(f"Up to {planned.workers} videos processed in parallel")
 
-    with RunProgress(console, planned, WORDING) as progress:
+    with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
         report = execute(planned, on_progress=progress.on_progress, on_event=progress.on_event)
+    args.desktop.report = report
     state.learn_speed(ARCHIVE.name, report.measured_speed())
     print_report(console, report, WORDING, log_file=args.log_file)
     if report.count(Status.SKIPPED) or report.count(Status.OUTDATED):

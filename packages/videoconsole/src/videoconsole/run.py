@@ -227,11 +227,8 @@ class RunProgress:
         self._progress.console.print(line)
 
 
-def print_report(
-    console: Console, report: RunReport, wording: Wording, *, log_file: Path | None
-) -> None:
-    """The counts of the run, then what went wrong with each video and how to fix it."""
-    record_report(console, report)
+def summary_line(report: RunReport, wording: Wording) -> str:
+    """The counts of a run, e.g. "3 archived, 1 already archived, 1 failed"."""
     parts = [f"{report.count(Status.OK)} {wording.done}"]
     if degraded := report.degraded:
         parts.append(f"{len(degraded)} {wording.degraded}")
@@ -239,12 +236,20 @@ def print_report(
         parts.append(f"{skipped} {wording.skipped}")
     if outdated := report.count(Status.OUTDATED):
         parts.append(f"{outdated} {wording.outdated}")
-    failed = report.failed
-    parts.append(f"{len(failed)} failed")
+    parts.append(f"{len(report.failed)} failed")
     if unfinished := report.unfinished:
         parts.append(f"{len(unfinished)} not finished")
-    style = "error" if failed else "warning" if degraded or unfinished else "ok"
-    console.info("Done: " + ", ".join(parts) + ".", style)
+    return ", ".join(parts)
+
+
+def print_report(
+    console: Console, report: RunReport, wording: Wording, *, log_file: Path | None
+) -> None:
+    """The counts of the run, then what went wrong with each video and how to fix it."""
+    record_report(console, report)
+    failed, degraded = report.failed, report.degraded
+    style = "error" if failed else "warning" if degraded or report.unfinished else "ok"
+    console.info(f"Done: {summary_line(report, wording)}.", style)
 
     show = report.plan.show
     for result in degraded:

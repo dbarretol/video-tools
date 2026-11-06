@@ -1,0 +1,285 @@
+"""What a command line does for the desktop around a run (Windows; no-ops elsewhere).
+
+- The computer does not go to sleep while videos are processed (`keep_awake`).
+- A run that took long ends with a notification (`notify`), so it can be left
+  in the background.
+- Started from the Explorer (double click, a shortcut, a file dropped on it)
+  the console window would close as soon as the run ends, before its report
+  can be read; `launched_alone` detects it, and `Desktop.finish` then waits for
+  Enter and offers to open the output folder.
+- ``--open`` opens the output folder at the end (`open_folder`).
+"""
+
+from __future__ import annotations
+
+import ctypes
+import logging
+import os
+import subprocess
+import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from videoconsole.console import Console
+from videoconsole.run import Wording, summary_line
+from videocore import Plan, RunReport, Status
+from videocore.options import option
+
+logger = logging.getLogger(__name__)
+
+SHELLS = frozenset(
+    {"cmd", "powershell", "pwsh", "bash", "sh", "zsh", "fish", "nu", "tcc", "wsl", "far", "clink"}
+)
+"""Programs that, attached to our console, mean we were started from a terminal."""
+
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+@dataclass(frozen=True)
+class ConsoleOptions:
+    """How the command line behaves on the desktop; config file only (``console`` section)."""
+
+    notify_after: float = option(
+        5.0,
+        "minutes a run must take to end with a desktop notification; 0 turns it off",
+        ge=0,
+        cli=False,
+    )
+    keep_awake: bool = option(
+        True, "keep the computer from going to sleep while videos are processed", cli=False
+    )
+    pause: bool = option(
+        True,
+        "when started from the Explorer, wait for Enter before closing the window",
+        cli=False,
+    )
+
+
+def _kernel32() -> Any | None:
+    if sys.platform != "win32":
+        return None
+    return ctypes.windll.kernel32  # type: ignore[attr-defined]
+
+
+@contextmanager
+def keep_awake(enabled: bool = True) -> Iterator[None]:
+    """Keep the computer from sleeping until the block ends (the screen may still turn off)."""
+    kernel32 = _kernel32() if enabled else None
+    if kernel32 is None:
+        yield
+        return
+    kernel32.SetThreadExecutionState(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED)
+    try:
+        yield
+    finally:
+        kernel32.SetThreadExecutionState(_ES_CONTINUOUS)
+
+
+def console_programs() -> list[str] | None:
+    """Names (lowercase, no extension) of the programs attached to this console.
+
+    None when unknown: not on Windows, no console, or a program that cannot be
+    inspected (e.g. an elevated shell).
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return None
+    pids = (ctypes.c_uint32 * 64)()
+    count = kernel32.GetConsoleProcessList(pids, len(pids))
+    if not 0 < count <= len(pids):
+        return None
+    names = []
+    for pid in pids[:count]:
+        name = _image_name(kernel32, pid)
+        if name is None:
+            return None
+        names.append(name)
+    return names
+
+
+def _image_name(kernel32: Any, pid: int) -> str | None:
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        size = ctypes.c_uint32(1024)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return None
+        return Path(buffer.value).stem.lower()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def launched_alone() -> bool:
+    """Whether this console window was opened for us, so it closes when we exit.
+
+    True when no shell is attached to the console (started from the Explorer
+    or a shortcut) and someone can answer (stdin is a terminal).
+    """
+    if sys.stdin is None or not sys.stdin.isatty():
+        return False
+    programs = console_programs()
+    return programs is not None and not SHELLS.intersection(programs)
+
+
+def open_folder(folder: Path) -> None:
+    """Open `folder` in the file manager; errors are logged, not raised."""
+    try:
+        if sys.platform == "win32":
+            os.startfile(folder)  # type: ignore[attr-defined]
+        else:
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([opener, str(folder)])  # noqa: S603
+    except OSError:
+        logger.warning("Could not open %s", folder, exc_info=True)
+
+
+def notify(app: str, title: str, message: str) -> bool:
+    """Show a desktop notification; False when none could be shown.
+
+    Uses the optional ``windows-toasts`` package (``videoconsole[notify]``);
+    without it, the console window flashes in the taskbar instead.
+    """
+    try:
+        from windows_toasts import Toast, WindowsToaster
+    except ImportError:
+        return _flash_console()
+    try:
+        WindowsToaster(app).show_toast(Toast([title, message]))
+    except Exception:  # noqa: BLE001 - a notification is never worth failing a run
+        logger.debug("Could not show a notification", exc_info=True)
+        return _flash_console()
+    return True
+
+
+class _FlashInfo(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint),
+        ("hwnd", ctypes.c_void_p),
+        ("dwFlags", ctypes.c_uint),
+        ("uCount", ctypes.c_uint),
+        ("dwTimeout", ctypes.c_uint),
+    ]
+
+
+def _flash_console() -> bool:
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return False
+    hwnd = kernel32.GetConsoleWindow()
+    if not hwnd:
+        return False
+    flash_all, until_foreground = 0x3, 0xC
+    info = _FlashInfo(ctypes.sizeof(_FlashInfo), hwnd, flash_all | until_foreground, 0, 0)
+    ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))  # type: ignore[attr-defined]
+    return True
+
+
+def output_folder(planned: Plan[Any]) -> Path | None:
+    """The folder to open after a run: the output folder, the scanned one, or the single output."""
+    if planned.run.output is not None:
+        folder = planned.run.output
+    elif planned.source is not None:
+        folder = planned.source
+    elif planned.items:
+        output = planned.items[0].output
+        folder = output if output.is_dir() else output.parent
+    else:
+        return None
+    return folder if folder.is_dir() else None
+
+
+def pause(console: Console, folder: Path | None) -> None:
+    """Wait for Enter; with `folder`, typing O first opens it."""
+    prompt = "Press Enter to close"
+    if folder is not None:
+        prompt += ", or O and Enter to open the output folder"
+    console.err.print(prompt + ": ", end="")
+    try:
+        answer = sys.stdin.readline()
+    except (OSError, KeyboardInterrupt):
+        return
+    if folder is not None and answer.strip().lower() == "o":
+        open_folder(folder)
+
+
+class Desktop:
+    """The desktop side of one command-line run.
+
+    Create it right after parsing; `configure` with the ``console`` section of
+    the config once it is read; run the work inside `running`, telling it the
+    plan and report; end with `finish`.
+    """
+
+    def __init__(
+        self, app: str, console: Console, wording: Wording, *, open_output: bool = False
+    ) -> None:
+        self.app = app
+        self.console = console
+        self.wording = wording
+        self.open_output = open_output
+        self.options = ConsoleOptions()
+        self.alone = launched_alone()
+        self.plan: Plan[Any] | None = None
+        self.report: RunReport | None = None
+        self.seconds = 0.0
+
+    def configure(self, options: ConsoleOptions) -> None:
+        self.options = options
+
+    @contextmanager
+    def running(self, planned: Plan[Any]) -> Iterator[None]:
+        """Around ``execute``: keeps the computer awake and measures the run.
+
+        Set `report` to what ``execute`` returned.
+        """
+        self.plan = planned
+        start = time.monotonic()
+        try:
+            with keep_awake(self.options.keep_awake):
+                yield
+        finally:
+            self.seconds += time.monotonic() - start
+
+    def finish(self, exit_code: int) -> int:
+        """Notify after a long run, open the output with ``--open``, pause if launched alone."""
+        minutes = self.options.notify_after
+        if self.report is not None and minutes > 0 and self.seconds >= minutes * 60:
+            notify(self.app, self._title(), summary_line(self.report, self.wording))
+        folder = output_folder(self.plan) if self.plan is not None else None
+        if self.open_output and folder is not None and self._produced():
+            open_folder(folder)
+            folder = None  # already open
+        if self.alone and self.options.pause:
+            pause(self.console, folder)
+        return exit_code
+
+    def _produced(self) -> bool:
+        if self.report is None:
+            return self.plan is not None and not self.plan.pending  # everything already done
+        return any(item.ok for item in self.report.items)
+
+    def _title(self) -> str:
+        report = self.report
+        if report is None:
+            return f"{self.app} finished"
+        if report.interrupted:
+            return f"{self.app} was interrupted"
+        if report.failed:
+            return f"{self.app} finished with failures"
+        if report.degraded or any(i.status is Status.CANCELLED for i in report.items):
+            return f"{self.app} finished with warnings"
+        return f"{self.app} finished"
+
+
+def pause_if_alone() -> None:
+    """Wait for Enter when launched from the Explorer, e.g. before exiting on invalid arguments."""
+    if launched_alone():
+        pause(Console(), None)
