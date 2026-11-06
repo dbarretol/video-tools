@@ -7,26 +7,31 @@ import dataclasses
 import logging
 from pathlib import Path
 
+from rich.text import Text
+
+from videoconsole import (
+    Console,
+    RunProgress,
+    Wording,
+    print_plan,
+    print_report,
+    report_run_lists,
+    setup_logging,
+)
 from videocore import (
     EXIT_FAILED,
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
-    ItemResult,
-    Plan,
-    ProgressEvent,
     RunOptions,
     State,
     Status,
     UsageError,
-    configure_logging,
-    default_runs_dir,
     execute,
     find_videos,
     hint_for,
     plan,
     probe,
-    write_run_lists,
 )
 from videocore.config import add_config_commands
 from videocore.options import add_arguments, given_values
@@ -50,16 +55,32 @@ from videosemanticreducer.status import ArchiveStatus, find_archives
 
 APP_NAME = "videosemanticreducer"
 
-STAGE_LABELS = {
-    "probe": "reading metadata",
-    "snapshots": "summary video",
-    "thumbnail": "thumbnail grid",
-    "global_hashes": "fingerprint: global hashes",
-    "keyframe_hashes": "fingerprint: keyframe hashes",
-    "sha256": "file hash",
-    "verify": "checking outputs",
-    "manifest": "manifest",
+WORDING = Wording(
+    verb="Archiving",
+    done="archived",
+    degraded="archived but incomplete",
+    skipped="already archived",
+    outdated="archived with other settings (not redone)",
+    stages={
+        "probe": "reading metadata",
+        "snapshots": "summary video",
+        "thumbnail": "thumbnail grid",
+        "global_hashes": "fingerprint: global hashes",
+        "keyframe_hashes": "fingerprint: keyframe hashes",
+        "sha256": "file hash",
+        "verify": "checking outputs",
+        "manifest": "manifest",
+    },
+)
+STATUS_STYLES = {
+    ArchiveStatus.READY: "green",
+    ArchiveStatus.INCOMPLETE: "yellow",
+    ArchiveStatus.FAILED: "red",
+    ArchiveStatus.CHANGED: "red",
+    ArchiveStatus.MISSING: "yellow",
 }
+
+QUIET_HELP = "only show warnings, errors and what to do about them"
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
+    parser.add_argument("-q", "--quiet", action="store_true", help=QUIET_HELP)
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     # Shared by every subcommand, so `-v` works before or after it. SUPPRESS keeps a
@@ -85,6 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=argparse.SUPPRESS,
         help="show debug messages",
+    )
+    common.add_argument(
+        "-q", "--quiet", action="store_true", default=argparse.SUPPRESS, help=QUIET_HELP
     )
 
     config_option = argparse.ArgumentParser(add_help=False, parents=[common, CONFIG.file_option()])
@@ -204,25 +229,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return EXIT_OK
 
-    level = logging.DEBUG if args.verbose else logging.INFO
-    log_file = configure_logging(APP_NAME, level=level, console=True)
+    console = args.console = Console(quiet=args.quiet)
+    log_file = args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
     logger.debug("Logging to %s", log_file)
-    args.log_file = log_file
     try:
         return args.handler(args)
     except KeyboardInterrupt:
-        logger.error("Interrupted; unfinished files were removed")
+        logger.info("Interrupted", exc_info=True)
+        console.detail("Interrupted; unfinished files were removed.", "warning")
         return EXIT_INTERRUPTED
     except UsageError as exc:
-        logger.error("%s", exc)
-        logger.debug("Details", exc_info=True)
+        logger.error("Usage error: %s", exc, exc_info=True)
+        console.error(str(exc))
         return EXIT_USAGE
     except (OSError, ValueError, RuntimeError) as exc:
-        logger.error("%s", exc)
-        if hint := hint_for(exc):
-            logger.error("  Hint: %s", hint)
-        logger.debug("Details", exc_info=True)
-        logger.info("Details: %s", log_file)
+        logger.error("Failed: %s", exc, exc_info=True)
+        console.error(str(exc))
+        console.hint(hint_for(exc), log_file)
         return EXIT_FAILED
 
 
@@ -230,7 +253,7 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
     """Config file values, overridden by the flags given on the command line."""
     config_path = find_config(args.config)
     if config_path is not None:
-        logger.info("Using defaults from %s", config_path)
+        logger.debug("Using defaults from %s", config_path)
     given = given_values(ProcessOptions, args) | given_values(RunOptions, args)
     try:
         return split_values(given, load_config(config_path))
@@ -239,6 +262,7 @@ def process_settings(args: argparse.Namespace) -> ProcessDefaults:
 
 
 def cmd_process(args: argparse.Namespace) -> int:
+    console: Console = args.console
     settings = process_settings(args)
     options = settings.options
     run = dataclasses.replace(settings.run, overwrite=args.overwrite)
@@ -250,119 +274,60 @@ def cmd_process(args: argparse.Namespace) -> int:
         output = resolve_output_dir(args.input, run.output, batch=False)
         planned = plan(ARCHIVE, [args.input], options, run, outputs=[output], speed=speed)
         if args.dry_run:
-            print_plan(planned)
+            print_plan(console, planned, WORDING, items=True)
             return EXIT_OK
         if not planned.pending:
             how = "already" if planned.items[0].state is Status.SKIPPED else "with other settings"
-            logger.info(
-                "%s is %s archived in %s; use --overwrite to redo it", args.input, how, output
-            )
+            console.info(f"{args.input} is {how} archived in {output}; use --overwrite to redo it")
             return EXIT_OK
-        report = execute(planned, on_event=stage_logger(logging.INFO))
+        with RunProgress(console, planned, WORDING) as progress:
+            report = execute(planned, on_event=progress.on_event)
         state.learn_speed(ARCHIVE.name, report.measured_speed())
         (result,) = report.items
         if result.status is Status.CANCELLED:
             raise KeyboardInterrupt
         if result.status is Status.FAILED:
-            logger.error("Could not archive %s: %s", args.input, result.error)
-            log_failure_details(result, args.log_file)
+            console.error(f"Could not archive {args.input}: {result.error}")
+            console.hint(result.hint, args.log_file)
         elif result.status is Status.DEGRADED:
-            logger.warning(
-                "Archived %s, but incomplete: %s", args.input, "; ".join(result.problems)
-            )
+            console.warning(f"archived {args.input}, but incomplete: {'; '.join(result.problems)}")
+            console.detail("Incomplete archives are not marked complete; the next run redoes them")
+        else:
+            console.info(f"Archived {args.input} in {result.output}", "ok")
         return report.exit_status(strict=args.strict)
     if not args.input.is_dir():
         raise UsageError(f"Input not found: {args.input}")
 
     videos = find_videos(args.input, recursive=run.recursive, skip_dir=is_output_dir)
     if not videos:
-        logger.warning("No videos found in %s", args.input)
+        console.info(f"No videos found in {args.input}")
         return EXIT_OK
     planned = plan(ARCHIVE, videos, options, run, source=args.input, speed=speed)
+    print_plan(console, planned, WORDING, items=args.dry_run)
     if args.dry_run:
-        print_plan(planned)
         return EXIT_OK
-    for line in planned.summary():
-        logger.info(line)
     if planned.pending:
-        logger.info("Up to %d videos processed in parallel", planned.workers)
+        console.info(f"Up to {planned.workers} videos processed in parallel")
 
-    def progress(done: int, total: int, result: ItemResult) -> None:
-        status = result.status.value if result.status is Status.OK else result.status.upper()
-        logger.info("[%d/%d] %s: %s", done, total, result.video.name, status)
-
-    report = execute(planned, on_progress=progress, on_event=stage_logger(logging.DEBUG))
+    with RunProgress(console, planned, WORDING) as progress:
+        report = execute(planned, on_progress=progress.on_progress, on_event=progress.on_event)
     state.learn_speed(ARCHIVE.name, report.measured_speed())
-    failed = report.failed
-    skipped, outdated = report.count(Status.SKIPPED), report.count(Status.OUTDATED)
-    summary = f"Done: {report.count(Status.OK)} archived"
-    if degraded := report.degraded:
-        summary += f", {len(degraded)} archived but incomplete"
-    summary += f", {skipped} already archived"
-    if outdated:
-        summary += f", {outdated} archived with other settings (not redone)"
-    summary += f", {len(failed)} failed"
-    if cancelled := report.count(Status.CANCELLED):
-        summary += f", {cancelled} not finished"
-    logger.info(summary)
-    if skipped or outdated:
-        logger.info("Use --overwrite to archive the skipped videos again")
-    for result in degraded:
-        logger.warning("Incomplete: %s (%s)", result.video, "; ".join(result.problems))
-    for result in failed:
-        logger.error("Failed: %s (%s)", result.video, result.error)
-        if result.hint:
-            logger.error("  Hint: %s", result.hint)
-    if failed:
-        logger.info("Details: %s", args.log_file)
-    if degraded:
-        logger.info("Incomplete archives are not marked complete; the next run redoes them")
-    if report.interrupted:
-        logger.error("Interrupted; unfinished files were removed")
-    lists = write_run_lists(
-        report, default_runs_dir(APP_NAME), title=f"{APP_NAME} process {args.input}"
-    )
-    if lists.failed:
-        logger.info("Videos to retry are listed in %s", lists.failed)
-    if lists.pending:
-        logger.info(
-            "Unfinished videos are listed in %s; run the same command again to resume "
-            "(archived videos are skipped)",
-            lists.pending,
-        )
+    print_report(console, report, WORDING, log_file=args.log_file)
+    if report.count(Status.SKIPPED) or report.count(Status.OUTDATED):
+        console.info("Use --overwrite to archive the skipped videos again")
+    if report.degraded:
+        console.detail("Incomplete archives are not marked complete; the next run redoes them")
+    resume = "run the same command again (archived videos are skipped)"
+    title = f"{APP_NAME} process {args.input}"
+    report_run_lists(console, report, APP_NAME, title=title, resume=resume)
     return report.exit_status(strict=args.strict)
-
-
-def log_failure_details(result: ItemResult, log_file: Path) -> None:
-    if result.hint:
-        logger.error("  Hint: %s", result.hint)
-    logger.info("Details: %s", log_file)
-
-
-def stage_logger(level: int):
-    """An ``on_event`` callback that logs when each video enters each stage."""
-    seen: set[tuple[Path, str]] = set()
-
-    def on_event(event: ProgressEvent) -> None:
-        if event.kind != "stage" or event.stage is None or (event.item, event.stage) in seen:
-            return
-        seen.add((event.item, event.stage))
-        label = STAGE_LABELS.get(event.stage, event.stage)
-        logger.log(level, "%s: %s", Path(event.item).name, label)
-
-    return on_event
-
-
-def print_plan(planned: Plan) -> None:
-    for line in [*planned.summary(), *planned.item_lines()]:
-        print(line)
 
 
 def cmd_fingerprint(args: argparse.Namespace) -> int:
     info = probe(args.video)
     output = args.output or args.video.with_name(f"{args.video.name}.fingerprint.json")
     save_fingerprint(compute_fingerprint(info), output)
-    logger.info("Fingerprint saved to %s", output)
+    args.console.info(f"Fingerprint saved to {output}", "ok")
     return 0
 
 
@@ -384,7 +349,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # Exit code 1 means "does not match", so every error is reported as 2 instead.
     try:
         saved = load_fingerprint(args.fingerprint)
-        logger.info("Computing fingerprint of %s", args.video)
+        args.console.info(f"Computing fingerprint of {args.video}")
         current = compute_fingerprint(probe(args.video))
     except (OSError, ValueError, RuntimeError) as exc:
         raise UsageError(f"Could not verify {args.video}: {exc}") from exc
@@ -414,24 +379,28 @@ def cmd_status(args: argparse.Namespace) -> int:
         if not path.exists():
             raise UsageError(f"Not found: {path}")
         checks += find_archives(path, output=output, recursive=args.recursive, full=args.full)
+    console: Console = args.console
     if not checks:
-        print("No videos or archives found")
+        console.notice("No videos or archives found")
         return EXIT_FAILED
 
     width = max(len(status.value) for status in ArchiveStatus)
     for check in checks:
-        print(f"{check.status.upper():<{width}}  {check.label}")
+        if console.quiet and check.status is ArchiveStatus.READY:
+            continue
+        line = Text(f"{check.status.upper():<{width}}", style=STATUS_STYLES[check.status])
+        console.out.print(line + Text(f"  {check.label}"))
         for detail in check.details:
-            print(f"{'':<{width}}    {detail}")
+            console.out.print(Text(f"{'':<{width}}    {detail}"))
     counts = [(status, sum(c.status is status for c in checks)) for status in ArchiveStatus]
     parts = [
         f"{count} {'ready to delete' if status is ArchiveStatus.READY else status.value}"
         for status, count in counts
         if count
     ]
-    print(f"{len(checks)} checked: " + ", ".join(parts))
+    console.notice(f"{len(checks)} checked: " + ", ".join(parts))
     if not args.full and counts[0][1]:
-        print("Only sizes were compared; use --full to also compare SHA-256 hashes.")
+        console.info("Only sizes were compared; use --full to also compare SHA-256 hashes.")
     ready = all(check.status is ArchiveStatus.READY for check in checks)
     return EXIT_OK if ready else EXIT_FAILED
 
