@@ -18,6 +18,7 @@ from rich.logging import RichHandler
 from rich.text import Text
 
 from videocore import configure_logging
+from videocore.logging_setup import for_the_user
 
 STYLES = {
     "ok": "green",
@@ -134,11 +135,17 @@ class Console:
 def setup_logging(app: str, console: Console, *, verbose: bool) -> Path:
     """Log to the app's file; with `verbose`, show debug messages on stderr too.
 
-    Messages go to the same console as the live progress, so they print above
-    it instead of breaking it. Returns the log file.
+    Without it, warnings logged with ``extra=FOR_THE_USER`` (see
+    ``videocore.logging_setup``) are shown as console warnings. Messages go to
+    the same console as the live progress, so they print above it instead of
+    breaking it. Returns the log file.
     """
     log_file = configure_logging(app, level=logging.DEBUG if verbose else logging.INFO)
-    if verbose:
+    if not verbose:
+        handler = _UserWarnings(console)
+        handler._videocore = True  # type: ignore[attr-defined] - replaced by the next setup
+        logging.getLogger().addHandler(handler)
+    else:
         handler = RichHandler(
             level=logging.DEBUG,
             console=console.err,
@@ -149,3 +156,18 @@ def setup_logging(app: str, console: Console, *, verbose: bool) -> Path:
         handler._videocore = True  # type: ignore[attr-defined] - replaced by the next setup
         logging.getLogger().addHandler(handler)
     return log_file
+
+
+class _UserWarnings(logging.Handler):
+    """Shows the warnings meant for the user as `Console.warning` lines."""
+
+    def __init__(self, console: Console) -> None:
+        super().__init__(logging.WARNING)
+        self.console = console
+        self.addFilter(for_the_user)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.console.warning(record.getMessage())
+        except Exception:  # noqa: BLE001 - logging must never break the run
+            self.handleError(record)
