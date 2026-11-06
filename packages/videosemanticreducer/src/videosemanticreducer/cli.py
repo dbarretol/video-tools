@@ -15,6 +15,7 @@ from videocore import (
     EXIT_USAGE,
     ItemResult,
     Plan,
+    ProgressEvent,
     RunOptions,
     Status,
     UsageError,
@@ -46,6 +47,16 @@ from videosemanticreducer.pipeline import (
 )
 
 APP_NAME = "videosemanticreducer"
+
+STAGE_LABELS = {
+    "probe": "reading metadata",
+    "snapshots": "summary video",
+    "thumbnail": "thumbnail grid",
+    "global_hashes": "fingerprint: global hashes",
+    "keyframe_hashes": "fingerprint: keyframe hashes",
+    "sha256": "file hash",
+    "manifest": "manifest",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +225,7 @@ def cmd_process(args: argparse.Namespace) -> int:
                 "%s is %s archived in %s; use --overwrite to redo it", args.input, how, output
             )
             return EXIT_OK
-        (result,) = execute(planned).items
+        (result,) = execute(planned, on_event=stage_logger(logging.INFO)).items
         if result.status is Status.CANCELLED:
             raise KeyboardInterrupt
         if result.status is Status.FAILED:
@@ -241,7 +252,7 @@ def cmd_process(args: argparse.Namespace) -> int:
         status = "ok" if result.ok else "FAILED"
         logger.info("[%d/%d] %s: %s", done, total, result.video.name, status)
 
-    report = execute(planned, on_progress=progress)
+    report = execute(planned, on_progress=progress, on_event=stage_logger(logging.DEBUG))
     failed = report.failed
     skipped, outdated = report.count(Status.SKIPPED), report.count(Status.OUTDATED)
     summary = f"Done: {report.count(Status.OK)} archived, {skipped} already archived"
@@ -256,6 +267,20 @@ def cmd_process(args: argparse.Namespace) -> int:
     for result in failed:
         logger.error("Failed: %s (%s)", result.video, result.error)
     return report.exit_code
+
+
+def stage_logger(level: int):
+    """An ``on_event`` callback that logs when each video enters each stage."""
+    seen: set[tuple[Path, str]] = set()
+
+    def on_event(event: ProgressEvent) -> None:
+        if event.kind != "stage" or event.stage is None or (event.item, event.stage) in seen:
+            return
+        seen.add((event.item, event.stage))
+        label = STAGE_LABELS.get(event.stage, event.stage)
+        logger.log(level, "%s: %s", Path(event.item).name, label)
+
+    return on_event
 
 
 def print_plan(planned: Plan) -> None:

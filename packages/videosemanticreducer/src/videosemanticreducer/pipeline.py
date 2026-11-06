@@ -35,6 +35,7 @@ from videocore import (
     evenly_spaced,
     iter_frames,
     probe,
+    progress,
     remove_partials,
     sample_frames,
 )
@@ -333,7 +334,9 @@ def _snapshots_and_thumbs(
     thumb_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     if not options.summary:
         timestamps = snapshot_timestamps(info.duration, cells)
-        return sample_frames(info.path, timestamps, size=thumb_size, workers=decoders)
+        return sample_frames(
+            info.path, timestamps, size=thumb_size, workers=decoders, stage="thumbnail"
+        )
 
     snap_size = even_size(info.video.width, info.video.height, SNAPSHOT_MAX_SIDE)
     timestamps = snapshot_timestamps(info.duration, options.num_snapshots)
@@ -348,7 +351,9 @@ def _snapshots_and_thumbs(
         writer.add(render_info_card(info, snap_size), duration=INFO_CARD_DURATION)
         # Frames arrive in order while the next ones are decoded, so encoding overlaps
         # decoding and only a few full-size frames are in memory at a time.
-        frames = iter_frames(info.path, timestamps, size=snap_size, workers=decoders)
+        frames = iter_frames(
+            info.path, timestamps, size=snap_size, workers=decoders, stage="snapshots"
+        )
         for index, image in frames:
             if image is None:
                 continue
@@ -369,6 +374,7 @@ def _snapshots_and_thumbs(
             snapshot_timestamps(info.duration, cells),
             size=thumb_size,
             workers=decoders,
+            stage="thumbnail",
         )
     return thumbs
 
@@ -409,6 +415,8 @@ class _Timer:
 
     @contextmanager
     def __call__(self, name: str) -> Iterator[None]:
+        if not name.endswith("_wait"):
+            progress.stage(name)  # stages that decode frames then report each one
         start = time.perf_counter()
         try:
             yield

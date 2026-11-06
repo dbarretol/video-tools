@@ -26,7 +26,7 @@ from typing import Any
 
 import imagehash
 
-from videocore import VideoInfo, atomic_write, compose_grid, evenly_spaced, sample_frames
+from videocore import VideoInfo, atomic_write, compose_grid, evenly_spaced, progress, sample_frames
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,13 @@ class IncompleteFingerprintError(RuntimeError):
 def compute_sha256(path: str | os.PathLike[str]) -> str:
     """SHA-256 of the whole file. hashlib releases the GIL, so this can run in a thread."""
     digest = hashlib.sha256()
+    total, done = os.path.getsize(path), 0
     with open(path, "rb") as fh:
         while chunk := fh.read(SHA_CHUNK_SIZE):
+            progress.check_cancelled()
             digest.update(chunk)
+            done += len(chunk)
+            progress.stage("sha256", done, total)
     return digest.hexdigest()
 
 
@@ -66,7 +70,13 @@ def compute_global_hashes(
     timestamps = evenly_spaced(info.duration * 0.01, info.duration * 0.99, frames)
     size = (GLOBAL_FRAME_SIZE, GLOBAL_FRAME_SIZE)
     images = sample_frames(
-        info.path, timestamps, mode="precise", size=size, workers=workers, draft=True
+        info.path,
+        timestamps,
+        mode="precise",
+        size=size,
+        workers=workers,
+        draft=True,
+        stage="global_hashes",
     )
     decoded = sum(img is not None for img in images)
     if decoded == 0:
@@ -97,7 +107,13 @@ def compute_keyframe_hashes(
     timestamps = [info.duration * pct / 100 for pct in positions]
     size = (KEYFRAME_SIZE, KEYFRAME_SIZE)
     images = sample_frames(
-        info.path, timestamps, mode="precise", size=size, workers=workers, draft=True
+        info.path,
+        timestamps,
+        mode="precise",
+        size=size,
+        workers=workers,
+        draft=True,
+        stage="keyframe_hashes",
     )
     hashes = []
     for pct, ts, img in zip(positions, timestamps, images, strict=True):
