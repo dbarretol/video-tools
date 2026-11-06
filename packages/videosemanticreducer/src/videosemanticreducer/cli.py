@@ -13,8 +13,10 @@ from videoconsole import (
     Console,
     RunProgress,
     Wording,
+    plan_document,
     print_plan,
     print_report,
+    record_report,
     report_run_lists,
     setup_logging,
 )
@@ -51,7 +53,7 @@ from videosemanticreducer.pipeline import (
     is_output_dir,
     resolve_output_dir,
 )
-from videosemanticreducer.status import ArchiveStatus, find_archives
+from videosemanticreducer.status import ArchiveCheck, ArchiveStatus, find_archives
 
 APP_NAME = "videosemanticreducer"
 
@@ -81,6 +83,7 @@ STATUS_STYLES = {
 }
 
 QUIET_HELP = "only show warnings, errors and what to do about them"
+JSON_HELP = "write the plan and the results to stdout as one JSON document; messages go to stderr"
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     config_option = argparse.ArgumentParser(add_help=False, parents=[common, CONFIG.file_option()])
+    json_option = argparse.ArgumentParser(add_help=False)
+    json_option.add_argument("--json", action="store_true", help=JSON_HELP)
 
     # Option defaults are None so that values from the config file apply unless a flag is given.
     process = commands.add_parser(
         "process",
-        parents=[config_option],
+        parents=[config_option, json_option],
         help="archive a video or every video in a folder",
         epilog="Defaults shown are the built-in ones; a config file can change them.",
     )
@@ -187,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser(
         "status",
-        parents=[config_option],
+        parents=[config_option, json_option],
         help="check that archives are complete and unchanged, before deleting originals",
         description=(
             "Check archives made by `process`: the manifest says they are complete, every "
@@ -229,23 +234,34 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return EXIT_OK
 
-    console = args.console = Console(quiet=args.quiet)
+    json = getattr(args, "json", False)
+    console = args.console = Console(quiet=args.quiet, json=json, tool=APP_NAME)
+    console.record(command=args.command)
     log_file = args.log_file = setup_logging(APP_NAME, console, verbose=args.verbose)
     logger.debug("Logging to %s", log_file)
+    return console.finish(run(args, console), log_file=log_file)
+
+
+def run(args: argparse.Namespace, console: Console) -> int:
+    """Run the parsed subcommand; errors are reported, not raised."""
     try:
         return args.handler(args)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
         logger.info("Interrupted", exc_info=True)
+        console.record_error(exc)
         console.detail("Interrupted; unfinished files were removed.", "warning")
         return EXIT_INTERRUPTED
     except UsageError as exc:
         logger.error("Usage error: %s", exc, exc_info=True)
+        console.record_error(exc)
         console.error(str(exc))
         return EXIT_USAGE
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("Failed: %s", exc, exc_info=True)
+        hint = hint_for(exc)
+        console.record_error(exc, hint)
         console.error(str(exc))
-        console.hint(hint_for(exc), log_file)
+        console.hint(hint, args.log_file)
         return EXIT_FAILED
 
 
@@ -277,12 +293,14 @@ def cmd_process(args: argparse.Namespace) -> int:
             print_plan(console, planned, WORDING, items=True)
             return EXIT_OK
         if not planned.pending:
+            console.record(plan=plan_document(planned))
             how = "already" if planned.items[0].state is Status.SKIPPED else "with other settings"
             console.info(f"{args.input} is {how} archived in {output}; use --overwrite to redo it")
             return EXIT_OK
         with RunProgress(console, planned, WORDING) as progress:
             report = execute(planned, on_event=progress.on_event)
         state.learn_speed(ARCHIVE.name, report.measured_speed())
+        record_report(console, report)
         (result,) = report.items
         if result.status is Status.CANCELLED:
             raise KeyboardInterrupt
@@ -380,6 +398,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             raise UsageError(f"Not found: {path}")
         checks += find_archives(path, output=output, recursive=args.recursive, full=args.full)
     console: Console = args.console
+    console.record(archives=[archive_document(check) for check in checks])
     if not checks:
         console.notice("No videos or archives found")
         return EXIT_FAILED
@@ -403,6 +422,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         console.info("Only sizes were compared; use --full to also compare SHA-256 hashes.")
     ready = all(check.status is ArchiveStatus.READY for check in checks)
     return EXIT_OK if ready else EXIT_FAILED
+
+
+def archive_document(check: ArchiveCheck) -> dict[str, object]:
+    return {
+        "video": check.video,
+        "archive": check.folder,
+        "name": check.name,
+        "status": check.status.value.replace(" ", "_"),
+        "details": check.details,
+    }
 
 
 def print_comparison(title: str, files: list[tuple[str, object]], report: Comparison) -> None:
