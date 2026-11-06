@@ -25,6 +25,9 @@ videosemanticreducer verify downloaded.mp4 movie.fingerprint.json
 videosemanticreducer status D:/Videos -o D:/Archive --full
 ```
 
+`vsr` is the same program, with a shorter name. Paths without a command are archived
+(`vsr movie.mp4`), unless `console.default_task` in the config file says `fingerprint` or `status`.
+
 `archive`, `fingerprint` and `status` take any number of videos, folders and patterns, and
 `--input-list FILE` (see the [main README](../../README.md#choosing-the-videos)). With a single
 video, `-o` is its archive folder; otherwise each video gets `<name>_summary/` inside `-o`.

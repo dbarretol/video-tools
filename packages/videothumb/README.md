@@ -22,7 +22,9 @@ videothumb sheet ./videos ./more/*.mkv --input-list extra.txt -o ./sheets --work
 videothumb gui
 ```
 
-`videothumb` without arguments shows the commands. `sheet`, `frames` and `pack` take any number of videos,
+`videothumb` without arguments shows the commands; `vthumb` is the same program. Paths without a
+command run the default task, `sheet` (`vthumb movie.mp4`), or the one set as
+`console.default_task` in the config file. `sheet`, `frames` and `pack` take any number of videos,
 folders and patterns, and `--input-list FILE` (see the
 [main README](../../README.md#choosing-the-videos)).
 

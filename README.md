@@ -8,6 +8,8 @@ Python tools for previewing and archiving video files, built on [PyAV](https://p
 | [**videothumb**](packages/videothumb) | Contact sheets (a grid of frames under the video's details) and folders of full-size frames, apart or in one ZIP, for any number of videos and folders. Desktop app and command line. |
 | [**videosemanticreducer**](packages/videosemanticreducer) | Archives videos before you delete them: a short summary video, a contact sheet, a metadata report and a perceptual fingerprint that can later tell whether another file is the same video. Command line. |
 
+[**vtools**](packages/vtools) is one command for both: `vtools sheet`, `vtools archive`, ...
+
 Both share [**videocore**](packages/videocore), a small library for probing videos, sampling frames,
 composing grids and processing folders in parallel, and [**videoconsole**](packages/videoconsole),
 which draws their progress and reports in the terminal.
@@ -21,42 +23,52 @@ Developed and tested on Windows 11; the code has no Windows-specific dependencie
 
 ## Installation
 
-Clone the repository and install the tools you want as commands on your `PATH`:
+Clone the repository and install the tools as commands on your `PATH`:
 
 ```bash
 git clone https://github.com/dbarretol/video-tools.git
 cd video-tools
-uv tool install ./packages/videothumb
-uv tool install ./packages/videosemanticreducer
+uv tool install ./packages/vtools --with-executables-from videothumb,videosemanticreducer
 ```
+
+That installs `vtools` and both tools with their short names: `videothumb` (`vthumb`) and
+`videosemanticreducer` (`vsr`). `uv tool upgrade vtools` updates them all. A single tool can be
+installed alone instead, e.g. `uv tool install ./packages/videothumb`.
 
 To try them without installing, run them from the clone with `uv run` (the first run creates the
 environment):
 
 ```bash
-uv run videothumb --help
-uv run videosemanticreducer --help
+uv run vtools --help
+uv run vthumb --help
+uv run vsr --help
 ```
 
 ## Quick start
 
 ```bash
-# Contact sheet of one video, 15 frames of every video in a folder
-videothumb sheet movie.mp4
-videothumb frames ./videos --count 15
+# Contact sheet of one video (without a command, `sheet` runs), 15 frames of each video in a folder
+vtools movie.mp4
+vtools frames ./videos --count 15
 
 # The sheet and its frames in one ZIP per video
-videothumb pack ./videos
+vtools pack ./videos
 
 # Open the videothumb desktop app
-videothumb gui
+vtools gui
 
-# Archive a video: movie_summary/ with summary video, grid, report and fingerprint
-videosemanticreducer archive movie.mp4
+# Archive a video: movie_summary/ with summary video, contact sheet, report and fingerprint
+vtools archive movie.mp4
 
 # Later: is this download the same video?
-videosemanticreducer verify downloaded.mp4 movie_summary/movie.fingerprint.json
+vtools verify downloaded.mp4 movie_summary/movie.fingerprint.json
 ```
+
+The same commands work with each tool: `vthumb movie.mp4`, `vsr archive movie.mp4`. Without a
+command, `vthumb` runs `sheet` and `vsr` runs `archive`, so a video dropped on the program in the
+Explorer is processed right away; `console.default_task` in the config file chooses another
+(`frames` or `pack`; `fingerprint` or `status`). A command name always wins over a file with the
+same name: write `.\sheet` for that file.
 
 Each tool's README documents every option: [videothumb](packages/videothumb/README.md),
 [videosemanticreducer](packages/videosemanticreducer/README.md).
@@ -81,6 +93,7 @@ console:
   notify_after: 5    # minutes; 0 turns notifications off
   keep_awake: true
   pause: true        # wait for Enter when started from the Explorer
+  default_task: sheet  # what the tool does with paths and no command
 ```
 
 ## Choosing the videos
@@ -170,6 +183,7 @@ packages/
   videoconsole/           terminal output of the command lines (rich): progress and reports
   videothumb/             contact sheets, frames and packs: CLI + tkinter desktop app
   videosemanticreducer/   archive pipeline, fingerprints, compare/verify
+  vtools/                 one command for both tools (it only routes)
 benchmarks/               timing harness (bench.py) and drivers for the tools
 ```
 
