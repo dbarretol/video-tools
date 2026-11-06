@@ -1,4 +1,7 @@
-"""Entry point: without arguments opens the GUI, with arguments runs the command line."""
+"""Entry point: without arguments opens the GUI, with arguments runs the command line.
+
+``videothumb config ...`` manages the defaults file of the command line.
+"""
 
 from __future__ import annotations
 
@@ -16,17 +19,19 @@ from videocore import (
     Plan,
     ProgressEvent,
     RunOptions,
+    State,
     Status,
     UsageError,
     configure_logging,
-    default_workers,
     execute,
     find_videos,
     plan,
 )
+from videocore.config import Values, add_config_commands
 from videocore.options import add_arguments, given_values, options_of
 from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
+from videothumb.config import CONFIG, RUN_SECTION
 from videothumb.jobs import TASKS, Options, default_output
 from videothumb.sheet import SheetOptions
 from videothumb.snapshots import SnapshotOptions
@@ -36,16 +41,6 @@ logger = logging.getLogger(__name__)
 REDO_HINT = "use --overwrite to replace them"
 
 
-def positive_int(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
-    if value <= 0:
-        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
-    return value
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=APP_NAME,
@@ -53,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Generate contact sheets and individual snapshots from videos. "
             "Run without arguments to open the desktop app."
         ),
+        epilog=(
+            "Defaults shown are the built-in ones; a config file can change them "
+            f"(see `{APP_NAME} config --help`)."
+        ),
+        parents=[CONFIG.file_option()],
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     source = parser.add_mutually_exclusive_group(required=True)
@@ -76,13 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="frames at exact positions (slower); by default the nearest earlier keyframe is used",
     )
-    parser.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
-    parser.add_argument(
-        "-w",
-        "--workers",
-        type=positive_int,
-        help=f"videos processed in parallel with --folder (default: {default_workers()})",
-    )
+    add_arguments(parser, RunOptions, skip=("output",))
     existing = parser.add_mutually_exclusive_group()
     existing.add_argument(
         "--overwrite",
@@ -115,18 +109,24 @@ def main(argv: list[str] | None = None) -> int:
 
         launch()
         return 0
+    if argv[0] == "config":
+        return config_main(argv[1:])
 
     args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
     configure_logging(APP_NAME, level=logging.DEBUG if args.verbose else logging.INFO)
     try:
-        mode, options = Mode(args.mode), build_options(args)
+        config_path = CONFIG.find(args.config)
+        if config_path is not None:
+            logger.debug("Using defaults from %s", config_path)
+        values = CONFIG.load(config_path)
+        mode, options = Mode(args.mode), build_options(args, values)
         if args.video is not None:
             if not args.video.is_file():
                 raise UsageError(f"Video not found: {args.video}")
             return run_single(args, mode, options)
         if not args.folder.is_dir():
             raise UsageError(f"Folder not found: {args.folder}")
-        return run_batch(args, mode, options)
+        return run_batch(args, mode, options, values)
     except KeyboardInterrupt:
         logger.info("Interrupted", exc_info=True)
         print("Interrupted; unfinished files were removed.", file=sys.stderr)
@@ -147,24 +147,56 @@ MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions]] = {
 }
 
 
-def build_options(args: argparse.Namespace) -> Options:
-    """The options of the selected mode; warns about flags that only apply to another one."""
+def config_main(argv: list[str]) -> int:
+    """``videothumb config ACTION``: manage the defaults file."""
+    parser = argparse.ArgumentParser(
+        prog=f"{APP_NAME} config",
+        description=(
+            "Manage the defaults file of the command line. Keys are MODE.OPTION or "
+            "run.OPTION, e.g. `config set sheet.columns 6`."
+        ),
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
+    add_config_commands(parser, CONFIG)
+    args = parser.parse_args(argv)  # exits with 2 on invalid arguments
+    configure_logging(APP_NAME, level=logging.DEBUG if args.verbose else logging.INFO)
+    try:
+        return args.handler(args)
+    except UsageError as exc:
+        logger.debug("Usage error: %s", exc, exc_info=True)
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except OSError as exc:
+        logger.error("Failed: %s", exc, exc_info=True)
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+
+def build_options(args: argparse.Namespace, values: Values | None = None) -> Options:
+    """The options of the selected mode: flags, then the config file `values`, then defaults.
+
+    Warns about flags that only apply to another mode.
+    """
     mode = Mode(args.mode)
     cls = MODE_OPTIONS[mode]
+    defaults = (values or {}).get(mode.value, {})
     given = given_values(cls, args)
     for other in MODE_OPTIONS.values():
         for opt in options_of(other):
             if opt.name not in given and getattr(args, opt.name, None) is not None:
                 logger.warning("%s does not apply to --mode %s; ignored", opt.flags[-1], mode)
-    sampling = "precise" if args.precise else "keyframe"
-    return cls(**given, sampling=sampling)
+    settings = defaults | given
+    if args.precise:
+        settings["sampling"] = "precise"
+    return cls(**settings)
 
 
 def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
     video = args.video
     target = args.output or default_output(video, mode)
     run = RunOptions(overwrite=not args.skip_existing)
-    planned = plan(TASKS[mode], [video], options, run, outputs=[target], measure=args.dry_run)
+    task, state = TASKS[mode], State(APP_NAME)
+    planned = plan(task, [video], options, run, outputs=[target], speed=state.speed(task.name))
     if args.dry_run:
         print_plan(planned)
         return EXIT_OK
@@ -172,6 +204,7 @@ def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
         print(f"Skipped: {target} already exists (use --overwrite to replace it)")
         return EXIT_OK
     report = execute(planned)
+    state.learn_speed(task.name, report.measured_speed())
     (result,) = report.items
     if result.status is Status.CANCELLED:
         raise KeyboardInterrupt
@@ -182,13 +215,16 @@ def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
     return EXIT_OK
 
 
-def run_batch(args: argparse.Namespace, mode: Mode, options: Options) -> int:
-    videos = find_videos(args.folder, recursive=args.recursive)
+def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Values) -> int:
+    settings = values.get(RUN_SECTION, {}) | given_values(RunOptions, args)
+    settings.pop("output", None)  # -o is not a config option; it is read below
+    run = RunOptions(output=args.output, overwrite=not args.skip_existing, **settings)
+    videos = find_videos(args.folder, recursive=run.recursive)
     if not videos:
         print(f"No videos found in {args.folder}")
         return EXIT_OK
-    run = RunOptions(output=args.output, workers=args.workers, overwrite=not args.skip_existing)
-    planned = plan(TASKS[mode], videos, options, run, source=args.folder)
+    task, state = TASKS[mode], State(APP_NAME)
+    planned = plan(task, videos, options, run, source=args.folder, speed=state.speed(task.name))
     if args.dry_run:
         print_plan(planned)
         return EXIT_OK
@@ -200,6 +236,7 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options) -> int:
         print(f"[{done}/{total}] {result.video.name}: {status}")
 
     report = execute(planned, on_progress=progress, on_event=log_event)
+    state.learn_speed(task.name, report.measured_speed())
     failed = report.failed
     skipped = report.count(Status.SKIPPED)
     summary = f"Done: {report.count(Status.OK)} succeeded, {len(failed)} failed"
