@@ -17,7 +17,7 @@ from videoconsole import ConsoleOptions
 from videocore import RunOptions
 from videocore.config import AppConfig, ConfigError, Section
 from videocore.options import option, options_of, validate
-from videosemanticreducer.pipeline import ProcessOptions
+from videosemanticreducer.pipeline import OLD_OPTION_NAMES, ProcessOptions
 
 APP_NAME = "videosemanticreducer"
 SECTION = "archive"
@@ -41,7 +41,7 @@ class TaskOptions:
 CONFIG = AppConfig(
     APP_NAME,
     (
-        Section(SECTION, (ProcessOptions, RunOptions)),
+        Section(SECTION, (ProcessOptions, RunOptions), renamed=tuple(OLD_OPTION_NAMES.items())),
         Section(
             CONSOLE_SECTION,
             (ConsoleOptions, TaskOptions),
@@ -49,6 +49,7 @@ CONFIG = AppConfig(
         ),
     ),
     f"{APP_NAME} defaults for the `archive` command.",
+    renamed=(("process", SECTION),),
 )
 CONFIG_ENV = CONFIG.env_var
 
