@@ -13,6 +13,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from videocore import (
+    NoFramesError,
+    NoVideoStreamError,
     VideoInfo,
     atomic_write,
     compose_grid,
@@ -73,7 +75,7 @@ def make_sheet(
     options = options or SheetOptions()
     info = probe(video)
     if info.video is None:
-        raise ValueError(f"No video stream in {info.path}")
+        raise NoVideoStreamError(f"No video stream in {info.path}")
 
     timestamps = evenly_spaced(0, info.duration, options.count, endpoints=False)
     width = options.thumbnail_width
@@ -91,7 +93,7 @@ def make_sheet(
     if counts is not None:
         counts.decoded, counts.total = decoded, len(frames)
     if decoded == 0:
-        raise RuntimeError(f"No frame could be decoded from {info.path}")
+        raise NoFramesError(f"No frame could be decoded from {info.path}")
     if decoded < len(frames):
         logger.warning(
             "Contact sheet of %s has %d/%d thumbnails; the rest are black",

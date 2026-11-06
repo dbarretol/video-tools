@@ -6,7 +6,14 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from videocore import atomic_write, evenly_spaced, iter_frames, probe
+from videocore import (
+    NoFramesError,
+    NoVideoStreamError,
+    atomic_write,
+    evenly_spaced,
+    iter_frames,
+    probe,
+)
 from videocore.options import option, validate
 from videocore.verify import FrameCount
 from videothumb.common import Sampling, jpeg_quality_option, sampling_option
@@ -48,7 +55,7 @@ def make_snapshots(
     options = options or SnapshotOptions()
     info = probe(video)
     if info.video is None:
-        raise ValueError(f"No video stream in {info.path}")
+        raise NoVideoStreamError(f"No video stream in {info.path}")
 
     timestamps = evenly_spaced(0, info.duration, options.count, endpoints=False)
     output_dir = Path(output_dir)
@@ -75,7 +82,7 @@ def make_snapshots(
     if counts is not None:
         counts.decoded, counts.total = len(saved), options.count
     if not saved:
-        raise RuntimeError(f"No frame could be decoded from {info.path}")
+        raise NoFramesError(f"No frame could be decoded from {info.path}")
     if len(saved) < options.count:
         logger.warning(
             "Saved %d/%d snapshots of %s; the other frames could not be decoded",

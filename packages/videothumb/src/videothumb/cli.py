@@ -25,6 +25,7 @@ from videocore import (
     configure_logging,
     execute,
     find_videos,
+    hint_for,
     plan,
 )
 from videocore.config import Values, add_config_commands
@@ -121,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         return config_main(argv[1:])
 
     args = build_parser().parse_args(argv)  # exits with 2 on invalid arguments
-    configure_logging(APP_NAME, level=logging.DEBUG if args.verbose else logging.INFO)
+    args.log_file = configure_logging(
+        APP_NAME, level=logging.DEBUG if args.verbose else logging.INFO
+    )
     try:
         config_path = CONFIG.find(args.config)
         if config_path is not None:
@@ -146,7 +149,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError) as exc:
         logger.error("Failed: %s", exc, exc_info=True)
         print(f"Error: {exc}", file=sys.stderr)
+        print_hint(hint_for(exc), args.log_file)
         return EXIT_FAILED
+
+
+def print_hint(hint: str | None, log_file: Path) -> None:
+    if hint:
+        print(f"  Hint: {hint}", file=sys.stderr)
+    print(f"Details: {log_file}", file=sys.stderr)
 
 
 MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions]] = {
@@ -217,7 +227,9 @@ def run_single(args: argparse.Namespace, mode: Mode, options: Options) -> int:
     if result.status is Status.CANCELLED:
         raise KeyboardInterrupt
     if result.status is Status.FAILED:
-        raise RuntimeError(result.error)
+        print(f"Error: {result.error}", file=sys.stderr)
+        print_hint(result.hint, args.log_file)
+        return EXIT_FAILED
     noun = "Contact sheet" if mode is Mode.SHEET else "Snapshots"
     print(f"{noun} saved to {result.output}")
     for problem in result.problems:
@@ -261,6 +273,10 @@ def run_batch(args: argparse.Namespace, mode: Mode, options: Options, values: Va
         print(f"  - {result.video.name}: incomplete: {'; '.join(result.problems)}", file=sys.stderr)
     for result in failed:
         print(f"  - {result.video.name}: {result.error}", file=sys.stderr)
+        if result.hint:
+            print(f"    Hint: {result.hint}", file=sys.stderr)
+    if failed:
+        print(f"Details: {args.log_file}", file=sys.stderr)
     return report.exit_status(strict=args.strict)
 
 
