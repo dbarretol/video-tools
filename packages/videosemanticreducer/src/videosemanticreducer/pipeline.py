@@ -40,6 +40,7 @@ from videocore import (
     sample_frames,
 )
 from videocore.options import option, options_of, validate
+from videocore.verify import FrameCount, check_file, check_image, check_video
 from videosemanticreducer import fingerprint as fp
 from videosemanticreducer.info_card import render_info_card
 from videosemanticreducer.manifest import (
@@ -114,6 +115,12 @@ class ProcessResult:
     manifest: Path | None = None
     timings: dict[str, float] = field(default_factory=dict)
     """Seconds spent in each step, for logging and benchmarks."""
+    frames: dict[str, FrameCount] = field(default_factory=dict)
+    """Frames decoded for the summary video and the thumbnail grid."""
+    problems: list[str] = field(default_factory=list)
+    """Why some artifacts are incomplete; such an archive is DEGRADED, not complete."""
+    thumb_size: tuple[int, int] | None = None
+    """Expected size of the thumbnail grid."""
 
 
 def resolve_output_dir(video: Path, output: Path | None, *, batch: bool) -> Path:
@@ -162,8 +169,9 @@ def process_video(
     the full file name for videos whose stems collide (see ``videocore.outputs``).
     `decoders` limits the containers decoding in parallel; batches pass 1 since
     videos already run in parallel.
-    The manifest (``<name>.archive.json``) is written last, with
-    ``complete: true`` only when every requested artifact was written.
+    Every artifact is read back once written (see `verify_artifacts`). The
+    manifest (``<name>.archive.json``) is written last, with ``complete: true``
+    only when every requested artifact was written and none is incomplete.
     """
     options = options or ProcessOptions()
     video, output_dir = Path(video), Path(output_dir)
@@ -187,6 +195,8 @@ def process_video(
     recorded = _recorded_options(options)
     try:
         sha256 = _write_artifacts(info, output_dir, stem, options, result, timer, decoders)
+        with timer("verify"):
+            result.problems = verify_artifacts(result, options)
     except Exception as exc:
         manifest = build_manifest(
             Source.from_info(info), recorded, result.outputs, error=f"{type(exc).__name__}: {exc}"
@@ -197,7 +207,9 @@ def process_video(
             logger.warning("Could not write %s", result.manifest, exc_info=True)
         raise
     with timer("manifest"):
-        manifest = build_manifest(Source.from_info(info, sha256), recorded, result.outputs)
+        manifest = build_manifest(
+            Source.from_info(info, sha256), recorded, result.outputs, problems=result.problems
+        )
         write_manifest(manifest, result.manifest)
 
     result.timings["total"] = time.perf_counter() - started
@@ -228,6 +240,14 @@ def _write_artifacts(
                     result.outputs.append(
                         _write_thumbnail(info, thumbs, output_dir / f"{stem}_thumb.jpg", options)
                     )
+                    result.frames["thumbnail"] = FrameCount(
+                        sum(thumb is not None for thumb in thumbs), len(thumbs)
+                    )
+                    cell_w, cell_h = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
+                    result.thumb_size = (
+                        options.thumb_cols * cell_w,
+                        options.thumb_rows * cell_h,
+                    )
 
         if sha_future is None:
             return None
@@ -243,6 +263,30 @@ def _write_artifacts(
         path = output_dir / f"{stem}.fingerprint.json"
         result.outputs.append(fp.save_fingerprint(fingerprint, path))
         return sha256
+
+
+def verify_artifacts(result: ProcessResult, options: ProcessOptions) -> list[str]:
+    """Read back every artifact of `result`; return why some are incomplete.
+
+    Raises ``videocore.verify.OutputError`` when one is missing or unreadable.
+    """
+    problems = []
+    for path in result.outputs:
+        if path.name.endswith("_summary.mp4"):
+            count = result.frames["summary"]
+            expected = INFO_CARD_DURATION + count.decoded * options.snap_duration
+            check_video(path, duration=expected)
+        elif path.name.endswith("_thumb.jpg"):
+            check_image(path, size=result.thumb_size)
+        elif path.name.endswith(".fingerprint.json"):
+            fp.check_complete(fp.load_fingerprint(path))
+        else:
+            check_file(path)
+    for what, count in result.frames.items():
+        label = "summary video" if what == "summary" else "thumbnail grid"
+        if problem := count.problem(label):
+            problems.append(problem)
+    return problems
 
 
 def _recorded_options(options: ProcessOptions) -> dict[str, object]:
@@ -307,6 +351,9 @@ class ArchiveTask:
     ) -> ProcessResult:
         return process_video(video, output, options, name=name, decoders=decoders)
 
+    def verify(self, output: Path, value: ProcessResult, options: ProcessOptions) -> list[str]:
+        return value.problems  # checked before the manifest was written
+
     def cleanup(self, output: Path) -> None:
         remove_partials(output)
 
@@ -364,6 +411,7 @@ def _snapshots_and_thumbs(
         if decoded == 0:
             raise RuntimeError(f"No snapshot could be decoded from {info.path}")
 
+    result.frames["summary"] = FrameCount(decoded, len(timestamps))
     if decoded < len(timestamps):
         logger.warning("Decoded %d/%d snapshots of %s", decoded, len(timestamps), info.path)
     result.outputs.append(summary_path)

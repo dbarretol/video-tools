@@ -2,7 +2,8 @@
 
 ``<name>.archive.json`` is written last in each output folder. It lists the
 source video and every artifact with its size and SHA-256, and sets
-``complete: true`` only when every requested artifact was written. A run that
+``complete: true`` only when every requested artifact was written and read back
+complete; incomplete ones are listed under ``problems``. A run that
 fails writes it with ``complete: false`` and the error; a run that is killed
 leaves no manifest at all. Either way the folder does not count as archived,
 however complete it looks.
@@ -54,8 +55,10 @@ def build_manifest(
     outputs: Iterable[Path],
     *,
     error: str | None = None,
+    problems: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Describe an archive run; it is complete only when no error happened."""
+    """Describe an archive run; it is complete only without an error or problems."""
+    problems = list(problems)
     return {
         "manifest_version": MANIFEST_VERSION,
         "tool": "videosemanticreducer",
@@ -73,8 +76,9 @@ def build_manifest(
             {"file": path.name, "size_bytes": path.stat().st_size, "sha256": compute_sha256(path)}
             for path in outputs
         ],
-        "complete": error is None,
+        "complete": error is None and not problems,
         "error": error,
+        "problems": problems,
     }
 
 

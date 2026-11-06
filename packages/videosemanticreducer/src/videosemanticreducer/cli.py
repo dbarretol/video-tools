@@ -53,6 +53,7 @@ STAGE_LABELS = {
     "global_hashes": "fingerprint: global hashes",
     "keyframe_hashes": "fingerprint: keyframe hashes",
     "sha256": "file hash",
+    "verify": "checking outputs",
     "manifest": "manifest",
 }
 
@@ -95,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_arguments(process, RunOptions, ProcessOptions)
     process.add_argument(
         "--dry-run", action="store_true", help="show what would be done, without archiving"
+    )
+    process.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat incomplete outputs (DEGRADED, exit code 3) as failures (exit code 1)",
     )
     existing = process.add_mutually_exclusive_group()
     existing.add_argument(
@@ -221,8 +227,11 @@ def cmd_process(args: argparse.Namespace) -> int:
             raise KeyboardInterrupt
         if result.status is Status.FAILED:
             logger.error("Could not archive %s: %s", args.input, result.error)
-            return EXIT_FAILED
-        return EXIT_OK
+        elif result.status is Status.DEGRADED:
+            logger.warning(
+                "Archived %s, but incomplete: %s", args.input, "; ".join(result.problems)
+            )
+        return report.exit_status(strict=args.strict)
     if not args.input.is_dir():
         raise UsageError(f"Input not found: {args.input}")
 
@@ -240,14 +249,17 @@ def cmd_process(args: argparse.Namespace) -> int:
         logger.info("Up to %d videos processed in parallel", planned.workers)
 
     def progress(done: int, total: int, result: ItemResult) -> None:
-        status = "ok" if result.ok else "FAILED"
+        status = result.status.value if result.status is Status.OK else result.status.upper()
         logger.info("[%d/%d] %s: %s", done, total, result.video.name, status)
 
     report = execute(planned, on_progress=progress, on_event=stage_logger(logging.DEBUG))
     state.learn_speed(ARCHIVE.name, report.measured_speed())
     failed = report.failed
     skipped, outdated = report.count(Status.SKIPPED), report.count(Status.OUTDATED)
-    summary = f"Done: {report.count(Status.OK)} archived, {skipped} already archived"
+    summary = f"Done: {report.count(Status.OK)} archived"
+    if degraded := report.degraded:
+        summary += f", {len(degraded)} archived but incomplete"
+    summary += f", {skipped} already archived"
     if outdated:
         summary += f", {outdated} archived with other settings (not redone)"
     summary += f", {len(failed)} failed"
@@ -256,9 +268,13 @@ def cmd_process(args: argparse.Namespace) -> int:
     logger.info(summary)
     if skipped or outdated:
         logger.info("Use --overwrite to archive the skipped videos again")
+    for result in degraded:
+        logger.warning("Incomplete: %s (%s)", result.video, "; ".join(result.problems))
     for result in failed:
         logger.error("Failed: %s (%s)", result.video, result.error)
-    return report.exit_code
+    if degraded:
+        logger.info("Incomplete archives are not marked complete; the next run redoes them")
+    return report.exit_status(strict=args.strict)
 
 
 def stage_logger(level: int):
