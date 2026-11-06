@@ -6,6 +6,8 @@ For ``movie.mp4`` the output folder gets:
 - ``movie_summary.mp4``: info card followed by evenly spaced snapshots.
 - ``movie_thumb.jpg``: grid of thumbnails.
 - ``movie.fingerprint.json``: perceptual fingerprint.
+- ``movie.archive.json``: manifest listing the above, written last; it says
+  ``complete: true`` only when every requested artifact was written.
 
 The video is decoded as few times as possible: the snapshots feed both the
 summary video and the thumbnail grid, and the file hash runs in a background
@@ -30,17 +32,26 @@ from videocore import (
     BatchResult,
     OutputSlot,
     VideoInfo,
+    atomic_write,
     compose_grid,
     default_workers,
     evenly_spaced,
     iter_frames,
     plan_outputs,
     probe,
+    remove_partials,
     run_parallel,
     sample_frames,
 )
 from videosemanticreducer import fingerprint as fp
 from videosemanticreducer.info_card import render_info_card
+from videosemanticreducer.manifest import (
+    MANIFEST_SUFFIX,
+    Source,
+    build_manifest,
+    manifest_path,
+    write_manifest,
+)
 from videosemanticreducer.report import write_report
 from videosemanticreducer.summary import SummaryWriter, even_size
 
@@ -79,6 +90,8 @@ class ProcessResult:
     video: Path
     output_dir: Path
     outputs: list[Path] = field(default_factory=list)
+    """Artifacts written, in order; the manifest is not one of them."""
+    manifest: Path | None = None
     timings: dict[str, float] = field(default_factory=dict)
     """Seconds spent in each step, for logging and benchmarks."""
 
@@ -100,12 +113,13 @@ def is_output_dir(path: Path) -> bool:
 
     Recursive scans skip these folders, so the summary videos inside them are
     never archived again. A folder that only happens to end in ``_summary`` is
-    still scanned unless it holds this tool's report or fingerprint.
+    still scanned unless it holds this tool's manifest, report or fingerprint
+    (folders written before manifests existed have no manifest).
     """
     if not path.name.endswith(OUTPUT_DIR_SUFFIX):
         return False
     stem = path.name.removesuffix(OUTPUT_DIR_SUFFIX)
-    markers = (f"{stem}_info.txt", f"{stem}.fingerprint.json")
+    markers = (f"{stem}{MANIFEST_SUFFIX}", f"{stem}_info.txt", f"{stem}.fingerprint.json")
     return any((path / marker).is_file() for marker in markers)
 
 
@@ -121,10 +135,12 @@ def process_video(
     *,
     name: str | None = None,
 ) -> ProcessResult:
-    """Write the artifacts of `video` into `output_dir`.
+    """Write the artifacts of `video` into `output_dir`, then its manifest.
 
     Artifacts are named after `name`, the video's stem by default; batches pass
     the full file name for videos whose stems collide (see ``videocore.outputs``).
+    The manifest (``<name>.archive.json``) is written last, with
+    ``complete: true`` only when every requested artifact was written.
     """
     options = options or ProcessOptions()
     video, output_dir = Path(video), Path(output_dir)
@@ -137,13 +153,47 @@ def process_video(
     if not info.has_video:
         # Nothing could prove later that a copy matches this file, so it is not archived.
         raise ValueError(f"No video stream in {video}")
-    output_dir.mkdir(parents=True, exist_ok=True)
     stem = name or video.stem
-    result.outputs.append(write_report(info, output_dir / f"{stem}_info.txt"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    remove_partials(output_dir)  # left by a run that was killed
+    result.manifest = manifest_path(output_dir, stem)
+    # A rerun must not leave the previous "complete" record next to new, unfinished files.
+    result.manifest.unlink(missing_ok=True)
     logger.info("Processing %s (%s, %s)", video, info.duration_hms, info.format_name)
 
+    recorded = _recorded_options(options)
+    try:
+        sha256 = _write_artifacts(info, output_dir, stem, options, result, timer)
+    except Exception as exc:
+        manifest = build_manifest(
+            Source.from_info(info), recorded, result.outputs, error=f"{type(exc).__name__}: {exc}"
+        )
+        try:
+            write_manifest(manifest, result.manifest)
+        except OSError:
+            logger.warning("Could not write %s", result.manifest, exc_info=True)
+        raise
+    with timer("manifest"):
+        manifest = build_manifest(Source.from_info(info, sha256), recorded, result.outputs)
+        write_manifest(manifest, result.manifest)
+
+    result.timings["total"] = time.perf_counter() - started
+    logger.info("Finished %s in %.1f s -> %s", video, result.timings["total"], output_dir)
+    return result
+
+
+def _write_artifacts(
+    info: VideoInfo,
+    output_dir: Path,
+    stem: str,
+    options: ProcessOptions,
+    result: ProcessResult,
+    timer: _Timer,
+) -> str | None:
+    """Write the requested artifacts into `result.outputs`; return the file's SHA-256."""
+    result.outputs.append(write_report(info, output_dir / f"{stem}_info.txt"))
     with ThreadPoolExecutor(max_workers=1) as hasher:
-        sha_future = hasher.submit(fp.compute_sha256, video) if options.fingerprint else None
+        sha_future = hasher.submit(fp.compute_sha256, info.path) if options.fingerprint else None
 
         if options.summary or options.thumbnail:
             with timer("snapshots"):
@@ -155,22 +205,27 @@ def process_video(
                         _write_thumbnail(info, thumbs, output_dir / f"{stem}_thumb.jpg", options)
                     )
 
-        if sha_future is not None:
-            with timer("global_hashes"):
-                global_hashes = fp.compute_global_hashes(info, workers=options.sampling_workers)
-            with timer("keyframe_hashes"):
-                keyframe_hashes = fp.compute_keyframe_hashes(info, workers=options.sampling_workers)
-            with timer("sha256_wait"):
-                sha256 = sha_future.result()
-            fingerprint = fp.build_fingerprint(info, sha256, global_hashes, keyframe_hashes)
-            # An incomplete fingerprint is never written: it would look like a valid archive.
-            fp.check_complete(fingerprint)
-            path = output_dir / f"{stem}.fingerprint.json"
-            result.outputs.append(fp.save_fingerprint(fingerprint, path))
+        if sha_future is None:
+            return None
+        with timer("global_hashes"):
+            global_hashes = fp.compute_global_hashes(info, workers=options.sampling_workers)
+        with timer("keyframe_hashes"):
+            keyframe_hashes = fp.compute_keyframe_hashes(info, workers=options.sampling_workers)
+        with timer("sha256_wait"):
+            sha256 = sha_future.result()
+        fingerprint = fp.build_fingerprint(info, sha256, global_hashes, keyframe_hashes)
+        # An incomplete fingerprint is never written: it would look like a valid archive.
+        fp.check_complete(fingerprint)
+        path = output_dir / f"{stem}.fingerprint.json"
+        result.outputs.append(fp.save_fingerprint(fingerprint, path))
+        return sha256
 
-    result.timings["total"] = time.perf_counter() - started
-    logger.info("Finished %s in %.1f s -> %s", video, result.timings["total"], output_dir)
-    return result
+
+def _recorded_options(options: ProcessOptions) -> dict[str, object]:
+    """The options that shape the artifacts; how many decoders ran does not."""
+    recorded = dataclasses.asdict(options)
+    del recorded["sampling_workers"]
+    return recorded
 
 
 def process_batch(
@@ -199,19 +254,28 @@ def process_batch(
         # Videos already run in parallel; one decoder per video avoids oversubscription.
         options = dataclasses.replace(options, sampling_workers=1)
     task = functools.partial(_process_in_batch, options=options)
-    return run_parallel(
-        task,
-        videos,
-        item_args=slots,
-        workers=workers,
-        on_progress=on_progress,
-        should_cancel=should_cancel,
-    )
+    try:
+        return run_parallel(
+            task,
+            videos,
+            item_args=slots,
+            workers=workers,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+        )
+    finally:
+        # Workers killed on cancel or Ctrl+C leave their unfinished files behind.
+        for slot in slots:
+            remove_partials(_slot_dir(slot))
+
+
+def _slot_dir(slot: OutputSlot) -> Path:
+    return slot.folder / f"{slot.name}{OUTPUT_DIR_SUFFIX}"
 
 
 def _process_in_batch(video: Path, slot: OutputSlot, *, options: ProcessOptions) -> Path:
     # Module-level so it can be pickled into worker processes.
-    out_dir = slot.folder / f"{slot.name}{OUTPUT_DIR_SUFFIX}"
+    out_dir = _slot_dir(slot)
     process_video(video, out_dir, options, name=slot.name)
     return out_dir
 
@@ -297,7 +361,8 @@ def _write_thumbnail(
     assert info.video is not None
     cell_size = even_size(info.video.width, info.video.height, THUMB_MAX_SIDE)
     grid = compose_grid(thumbs, options.thumb_cols, cell_size=cell_size)
-    grid.save(path, "JPEG", quality=THUMB_JPEG_QUALITY)
+    with atomic_write(path) as part:
+        grid.save(part, "JPEG", quality=THUMB_JPEG_QUALITY)
     return path
 
 

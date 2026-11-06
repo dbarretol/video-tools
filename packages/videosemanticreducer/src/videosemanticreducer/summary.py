@@ -9,12 +9,16 @@ re-encoding at 25 fps.
 
 from __future__ import annotations
 
+import contextlib
+import os
 from fractions import Fraction
 from pathlib import Path
 from types import TracebackType
 
 import av
 from PIL import Image
+
+from videocore import part_path
 
 DEFAULT_ENCODER_OPTIONS = {"crf": "26", "preset": "veryfast", "tune": "stillimage"}
 
@@ -29,7 +33,11 @@ def even_size(width: int, height: int, max_side: int) -> tuple[int, int]:
 
 
 class SummaryWriter:
-    """Encode stills of a fixed size into an H.264 MP4, each shown for `still_duration`."""
+    """Encode stills of a fixed size into an H.264 MP4, each shown for `still_duration`.
+
+    The video is encoded into ``<path>.part`` and only renamed to `path` when the
+    writer is closed without an error, so `path` never holds a truncated video.
+    """
 
     def __init__(
         self,
@@ -47,7 +55,13 @@ class SummaryWriter:
         self.frames_written = 0
 
         rate = 1 / Fraction(still_duration).limit_denominator(1000)
-        self._container = av.open(str(path), mode="w", container_options={"movflags": "+faststart"})
+        self._part = part_path(path)
+        self._container = av.open(
+            str(self._part),
+            mode="w",
+            format="mp4",  # the .part name does not tell the muxer which format
+            container_options={"movflags": "+faststart"},
+        )
         self._stream = self._container.add_stream("libx264", rate=rate)
         self._stream.width, self._stream.height = size
         self._stream.pix_fmt = "yuv420p"
@@ -65,6 +79,7 @@ class SummaryWriter:
             self.frames_written += 1
 
     def close(self) -> None:
+        """Finish the video and move it to its final path."""
         if self._container is None:
             return
         try:
@@ -72,6 +87,16 @@ class SummaryWriter:
         finally:
             self._container.close()
             self._container = None
+        os.replace(self._part, self.path)
+
+    def discard(self) -> None:
+        """Stop encoding and delete the unfinished video."""
+        if self._container is not None:
+            # Closing a half-written file may fail too; the error that led here matters more.
+            with contextlib.suppress(Exception):
+                self._container.close()
+            self._container = None
+        self._part.unlink(missing_ok=True)
 
     def __enter__(self) -> SummaryWriter:
         return self
@@ -82,9 +107,11 @@ class SummaryWriter:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
+        if exc_type is not None:
+            self.discard()
+            return
         try:
             self.close()
-        finally:
-            if exc_type is not None:
-                # Do not leave a truncated video behind.
-                self.path.unlink(missing_ok=True)
+        except BaseException:
+            self.discard()
+            raise

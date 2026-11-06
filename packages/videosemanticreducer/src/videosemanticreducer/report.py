@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from videocore import VideoInfo
+from videocore import VideoInfo, atomic_write
 
 
 def format_size(size_bytes: float) -> str:
@@ -65,5 +65,6 @@ def format_report(info: VideoInfo) -> str:
 
 
 def write_report(info: VideoInfo, path: Path) -> Path:
-    path.write_text(format_report(info), encoding="utf-8")
+    with atomic_write(path) as part:
+        part.write_text(format_report(info), encoding="utf-8")
     return path

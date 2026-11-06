@@ -26,7 +26,7 @@ from typing import Any
 
 import imagehash
 
-from videocore import VideoInfo, compose_grid, evenly_spaced, sample_frames
+from videocore import VideoInfo, atomic_write, compose_grid, evenly_spaced, sample_frames
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,8 @@ def compute_fingerprint(
 
 
 def save_fingerprint(fingerprint: dict[str, Any], path: Path) -> Path:
-    path.write_text(json.dumps(fingerprint, indent=2, ensure_ascii=False), encoding="utf-8")
+    with atomic_write(path) as part:
+        part.write_text(json.dumps(fingerprint, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
 
 
