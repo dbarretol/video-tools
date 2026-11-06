@@ -480,12 +480,14 @@ source = { editable = "packages/videocore" }
 dependencies = [
     { name = "av" },
     { name = "pillow" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=19.0.2" },
     { name = "pillow", specifier = ">=13.0.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [[package]]
