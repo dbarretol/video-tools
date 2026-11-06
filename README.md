@@ -7,6 +7,7 @@
 Contact sheets, frames and compact video archives for any number of videos and folders,<br>
 from the command line or a desktop app. No FFmpeg install needed.
 
+[![CI](https://github.com/dbarretol/video-tools/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/dbarretol/video-tools/actions/workflows/ci.yml)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Windows 11](https://img.shields.io/badge/tested%20on-Windows%2011-0078D4)
 ![uv](https://img.shields.io/badge/built%20with-uv-DE5FE9)
@@ -269,6 +270,9 @@ uv run ruff format .         # format
 Tests generate tiny synthetic videos on the fly; no videos are stored in the repository. The
 images of this README come from a synthetic video too: `uv run python docs/images/make_images.py`
 makes them again.
+
+Every pull request and every push to `dev` or `main` runs the same checks on GitHub Actions
+([ci.yml](.github/workflows/ci.yml)): the lock file, ruff, and the tests on Windows and Linux.
 
 To time the tools on your own videos:
 
