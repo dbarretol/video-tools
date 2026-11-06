@@ -21,7 +21,8 @@ from videocore import (
     probe,
     sample_frames,
 )
-from videothumb.common import Sampling
+from videocore.options import option, validate
+from videothumb.common import Sampling, jpeg_quality_option, sampling_option
 
 BACKGROUND = (30, 30, 30)
 TEXT_COLOR = (255, 255, 255)
@@ -34,21 +35,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SheetOptions:
-    columns: int = 5
-    rows: int = 4
-    thumbnail_width: int = 320
-    jpeg_quality: int = 90
-    sampling: Sampling = "keyframe"
+    columns: int = option(5, "thumbnails per row", gt=0, group="contact sheet")
+    rows: int = option(4, "rows of thumbnails", gt=0, group="contact sheet")
+    thumbnail_width: int = option(
+        320, "thumbnail width in pixels", ge=16, label="Thumbnail width", group="contact sheet"
+    )
+    jpeg_quality: int = jpeg_quality_option()
+    sampling: Sampling = sampling_option()
     workers: int | None = None
     """Containers decoding in parallel; use 1 when processing videos in parallel."""
 
     def __post_init__(self) -> None:
-        if self.columns <= 0 or self.rows <= 0:
-            raise ValueError("columns and rows must be greater than 0")
-        if self.thumbnail_width < 16:
-            raise ValueError("thumbnail_width must be at least 16")
-        if not 1 <= self.jpeg_quality <= 100:
-            raise ValueError("jpeg_quality must be between 1 and 100")
+        validate(self)
 
     @property
     def count(self) -> int:

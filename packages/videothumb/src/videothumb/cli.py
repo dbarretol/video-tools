@@ -18,6 +18,7 @@ from videocore import (
     default_workers,
     find_videos,
 )
+from videocore.options import add_arguments, given_values, options_of
 from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
 from videothumb.jobs import Options, default_output, has_output, process, process_folder
@@ -27,23 +28,14 @@ from videothumb.snapshots import SnapshotOptions
 logger = logging.getLogger(__name__)
 
 
-def int_at_least(minimum: int, maximum: int | None = None):
-    """An argparse type for whole numbers in ``[minimum, maximum]``."""
-
-    def parse(text: str) -> int:
-        try:
-            value = int(text)
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
-        if value < minimum or (maximum is not None and value > maximum):
-            limits = f"between {minimum} and {maximum}" if maximum else f"at least {minimum}"
-            raise argparse.ArgumentTypeError(f"must be {limits}, got {value}")
-        return value
-
-    return parse
-
-
-positive_int = int_at_least(1)
+def positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be greater than 0, got {value}")
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,19 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    sheet = parser.add_argument_group("contact sheet")
-    sheet.add_argument("--columns", type=positive_int, default=5, help="default: 5")
-    sheet.add_argument("--rows", type=positive_int, default=4, help="default: 4")
-    sheet.add_argument(
-        "--thumbnail-width", type=int_at_least(16), default=320, help="pixels (default: 320)"
-    )
-
-    snapshots = parser.add_argument_group("snapshots")
-    snapshots.add_argument("--count", type=positive_int, default=10, help="default: 10")
-
-    parser.add_argument(
-        "--quality", type=int_at_least(1, 100), default=90, help="JPEG quality 1-100 (default: 90)"
-    )
+    add_arguments(parser, SheetOptions, SnapshotOptions)
     parser.add_argument(
         "--precise",
         action="store_true",
@@ -148,17 +128,23 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_FAILED
 
 
+MODE_OPTIONS: dict[Mode, type[SheetOptions] | type[SnapshotOptions]] = {
+    Mode.SHEET: SheetOptions,
+    Mode.SNAPSHOTS: SnapshotOptions,
+}
+
+
 def build_options(args: argparse.Namespace) -> Options:
+    """The options of the selected mode; warns about flags that only apply to another one."""
+    mode = Mode(args.mode)
+    cls = MODE_OPTIONS[mode]
+    given = given_values(cls, args)
+    for other in MODE_OPTIONS.values():
+        for opt in options_of(other):
+            if opt.name not in given and getattr(args, opt.name, None) is not None:
+                logger.warning("%s does not apply to --mode %s; ignored", opt.flags[-1], mode)
     sampling = "precise" if args.precise else "keyframe"
-    if args.mode == Mode.SHEET:
-        return SheetOptions(
-            columns=args.columns,
-            rows=args.rows,
-            thumbnail_width=args.thumbnail_width,
-            jpeg_quality=args.quality,
-            sampling=sampling,
-        )
-    return SnapshotOptions(count=args.count, jpeg_quality=args.quality, sampling=sampling)
+    return cls(**given, sampling=sampling)
 
 
 def run_single(

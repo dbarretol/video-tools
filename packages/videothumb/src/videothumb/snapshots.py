@@ -7,24 +7,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from videocore import atomic_write, evenly_spaced, iter_frames, probe
-from videothumb.common import Sampling
+from videocore.options import option, validate
+from videothumb.common import Sampling, jpeg_quality_option, sampling_option
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class SnapshotOptions:
-    count: int = 10
-    jpeg_quality: int = 90
-    sampling: Sampling = "keyframe"
+    count: int = option(10, "snapshots to save", gt=0, label="Snapshots", group="snapshots")
+    jpeg_quality: int = jpeg_quality_option()
+    sampling: Sampling = sampling_option()
     workers: int | None = None
     """Containers decoding in parallel; use 1 when processing videos in parallel."""
 
     def __post_init__(self) -> None:
-        if self.count <= 0:
-            raise ValueError("count must be greater than 0")
-        if not 1 <= self.jpeg_quality <= 100:
-            raise ValueError("jpeg_quality must be between 1 and 100")
+        validate(self)
 
 
 def default_snapshot_dir(video: Path) -> Path:
