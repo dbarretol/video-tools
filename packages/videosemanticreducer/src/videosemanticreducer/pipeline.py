@@ -322,7 +322,9 @@ def recorded_options(manifest: dict | None) -> dict[str, object]:
     return recorded
 
 
-def archive_state(output_dir: Path, name: str, options: ProcessOptions) -> str | None:
+def archive_state(
+    output_dir: Path, name: str, options: ProcessOptions, *, video: Path | None = None
+) -> str | None:
     """Whether the video named `name` still needs archiving with `options`.
 
     - ``"complete"``: a complete archive made with the same options.
@@ -330,18 +332,31 @@ def archive_state(output_dir: Path, name: str, options: ProcessOptions) -> str |
       other settings (e.g. another number of snapshots). It is not redone unless
       the user asks, since that can mean re-archiving a whole library.
     - None: it must be archived, because there is no complete manifest or an
-      artifact requested now (say, the fingerprint) was not made back then.
+      artifact requested now (say, the fingerprint) was not made back then,
+      or the archive is of another file: `video` (when given) does not have the
+      size recorded, as when a video was replaced by another of the same name.
     """
     path = manifest_path(output_dir, name)
     if not is_complete(path):
         return None
-    recorded = recorded_options(read_manifest(path))
+    manifest = read_manifest(path)
+    if video is not None and not _same_size(video, manifest):
+        return None
+    recorded = recorded_options(manifest)
     wanted = _recorded_options(options)
     if any(wanted[toggle] and not recorded.get(toggle) for toggle in _ARTIFACT_TOGGLES):
         return None
     settings = [key for key in wanted if key not in _ARTIFACT_TOGGLES]
     same = all(recorded.get(key) == wanted[key] for key in settings)
     return ARCHIVE_COMPLETE if same else ARCHIVE_OUTDATED
+
+
+def _same_size(video: Path, manifest: dict | None) -> bool:
+    recorded = ((manifest or {}).get("source") or {}).get("size_bytes")
+    try:
+        return recorded is None or video.stat().st_size == recorded
+    except OSError:
+        return True  # a missing video fails later with a clear error
 
 
 def _slot_dir(slot: OutputSlot) -> Path:
@@ -363,8 +378,8 @@ class ArchiveTask:
     def output(self, slot: OutputSlot) -> Path:
         return _slot_dir(slot)
 
-    def state(self, output: Path, name: str, options: ProcessOptions) -> Status | None:
-        state = archive_state(output, name, options)
+    def state(self, video: Path, output: Path, name: str, options: ProcessOptions) -> Status | None:
+        state = archive_state(output, name, options, video=video)
         if state == ARCHIVE_COMPLETE:
             return Status.SKIPPED
         return Status.OUTDATED if state == ARCHIVE_OUTDATED else None
