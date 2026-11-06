@@ -176,3 +176,22 @@ def test_debug_messages_reach_the_console_only_when_verbose(capsys):
     assert "shown" in capsys.readouterr().err
     assert "to the file only" in log_file.read_text(encoding="utf-8")
     setup_logging("app", Console(), verbose=False)  # leave no console handler behind
+
+
+def test_json_document(planned, tmp_path, capsys):
+    import json
+
+    console = Console(json=True, tool="app")
+    print_plan(console, planned, WORDING)
+    console.info("for people")
+    assert console.finish(3, log_file=tmp_path / "ñ.log") == 3
+    captured = capsys.readouterr()
+    assert captured.out.isascii() and "for people" in captured.err
+    document = json.loads(captured.out)
+    assert document["tool"] == "app" and document["exit_code"] == 3
+    assert document["log_file"] == str(tmp_path / "ñ.log")
+    assert document["plan"]["counts"] == {"pending": 2, "skipped": 1, "outdated": 0}
+
+    plain = Console()
+    plain.record(anything=1)
+    assert plain.finish(0) == 0 and capsys.readouterr().out == ""

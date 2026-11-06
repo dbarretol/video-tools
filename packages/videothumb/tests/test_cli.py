@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from videothumb import cli
@@ -314,3 +316,40 @@ def test_names_with_brackets_are_printed_as_they_are(clip, tmp_path, capsys):
     shutil.copy(clip, video)
     assert cli.main(["--video", str(video), "--mode", "sheet"]) == 0
     assert "clip [1080p] [bold]x_sheet.jpg" in capsys.readouterr().out
+
+
+def test_json_puts_one_document_on_stdout(folder, capsys):
+    import json
+
+    (folder / "a_sheet.jpg").write_bytes(b"from an earlier run")
+    args = ["--folder", str(folder), "--mode", "sheet", "-w", "1", "--skip-existing", "--json"]
+    assert cli.main(args) == 1
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["schema"] == 1 and document["tool"] == "videothumb"
+    assert document["mode"] == "sheet" and document["exit_code"] == 1
+    assert document["plan"]["counts"] == {"pending": 2, "skipped": 1, "outdated": 0}
+    items = document["report"]["items"]
+    statuses = {Path(item["video"]).name: item["status"] for item in items}
+    assert statuses == {"a.mp4": "skipped", "b.mkv": "ok", "broken.mp4": "failed"}
+    broken = document["report"]["items"][2]
+    assert broken["error_type"] == "VideoOpenError" and broken["hint"]
+    assert document["run_lists"]["failed"].endswith("_sheet_failed.txt")
+    # Everything for people went to stderr.
+    assert "Done: 1 succeeded" in captured.err and "3 videos" in captured.err
+
+
+def test_json_dry_run_and_errors(folder, tmp_path, capsys):
+    import json
+
+    assert cli.main(["--folder", str(folder), "--mode", "sheet", "--dry-run", "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert [item["state"] for item in document["plan"]["items"]] == ["pending"] * 3
+    assert "report" not in document
+
+    missing = str(tmp_path / "missing.mp4")
+    assert cli.main(["--video", missing, "--mode", "sheet", "--json"]) == 2
+    document = json.loads(capsys.readouterr().out)
+    assert document["error"]["type"] == "UsageError"
+    assert document["error"]["message"].startswith("Video not found")
+    assert document["exit_code"] == 2

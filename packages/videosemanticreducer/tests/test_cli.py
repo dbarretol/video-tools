@@ -290,3 +290,27 @@ def test_interrupted_batch_says_how_to_resume(clip, tmp_path, monkeypatch, capsy
     assert "Interrupted" in captured.err
     (pending,) = default_runs_dir("videosemanticreducer").glob("*_archive_pending.txt")
     assert str((folder / "b.mp4").resolve()) in pending.read_text(encoding="utf-8-sig")
+
+
+def test_process_and_status_json(clip, tmp_path, capsys):
+    import json
+
+    video = tmp_path / "vídeo.mp4"  # non-ASCII names are escaped, whatever the console encoding
+    shutil.copy(clip, video)
+    assert main(["process", str(video), "--json", *FAST]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii()
+    document = json.loads(out)
+    assert document["command"] == "process" and document["exit_code"] == 0
+    (item,) = document["report"]["items"]
+    assert item["status"] == "ok" and item["video"] == str(video)
+
+    assert main(["status", str(tmp_path), "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    (archive,) = document["archives"]
+    assert archive["status"] == "ready" and archive["video"] == str(video)
+
+    (tmp_path / "other.mp4").write_bytes(b"x")
+    assert main(["status", str(tmp_path), "--json"]) == 1
+    statuses = [a["status"] for a in json.loads(capsys.readouterr().out)["archives"]]
+    assert statuses == ["not_archived", "ready"]
