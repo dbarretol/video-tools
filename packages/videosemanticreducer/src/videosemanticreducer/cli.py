@@ -31,13 +31,16 @@ from videocore import (
     State,
     Status,
     UsageError,
+    collect_inputs,
     execute,
-    find_videos,
+    expand_path,
     hint_for,
     plan,
     probe,
+    read_input_list,
 )
 from videocore.config import add_config_commands
+from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
 from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
@@ -131,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="archive a video or every video in a folder",
         epilog="Defaults shown are the built-in ones; a config file can change them.",
     )
-    process.add_argument("input", type=Path, help="video file or folder")
+    add_input_arguments(process, "videos or folders (one video: -o is its archive folder)")
     add_arguments(process, RunOptions, ProcessOptions)
     process.add_argument(
         "--dry-run", action="store_true", help="show what would be done, without archiving"
@@ -169,9 +172,13 @@ def build_parser() -> argparse.ArgumentParser:
     fingerprint = commands.add_parser(
         "fingerprint", parents=[common], help="only compute a video's fingerprint"
     )
-    fingerprint.add_argument("video", type=Path)
+    add_input_arguments(fingerprint)
+    fingerprint.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
     fingerprint.add_argument(
-        "-o", "--output", type=Path, help="JSON path (default: <video>.fingerprint.json)"
+        "-o",
+        "--output",
+        type=Path,
+        help="JSON path, for a single video (default: <video>.fingerprint.json next to each)",
     )
     fingerprint.set_defaults(handler=cmd_fingerprint)
 
@@ -206,9 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog="Exit code: 0 every archive is ready (originals can be deleted), 1 otherwise.",
     )
-    status.add_argument(
-        "paths", nargs="+", type=Path, metavar="PATH", help="video, archive folder or folder"
-    )
+    add_input_arguments(status, "videos, archive folders or folders")
     status.add_argument(
         "-o",
         "--output",
@@ -299,9 +304,17 @@ def cmd_process(args: argparse.Namespace) -> int:
     state = State(APP_NAME)
     speed = state.speed(ARCHIVE.name)
 
-    if args.input.is_file():
-        output = resolve_output_dir(args.input, run.output, batch=False)
-        planned = plan(ARCHIVE, [args.input], options, run, outputs=[output], speed=speed)
+    require_inputs(args)
+    inputs = collect_inputs(
+        args.paths, args.input_list, recursive=run.recursive, skip_dir=is_output_dir
+    )
+    for warning in inputs.warnings:
+        console.warning(warning)
+
+    if inputs.single_file:
+        (video,) = inputs.videos
+        output = resolve_output_dir(video, run.output, batch=False)
+        planned = plan(ARCHIVE, [video], options, run, outputs=[output], speed=speed)
         if args.dry_run:
             print_plan(console, planned, WORDING, items=True)
             return EXIT_OK
@@ -309,7 +322,7 @@ def cmd_process(args: argparse.Namespace) -> int:
             args.desktop.plan = planned
             console.record(plan=plan_document(planned))
             how = "already" if planned.items[0].state is Status.SKIPPED else "with other settings"
-            console.info(f"{args.input} is {how} archived in {output}; use --overwrite to redo it")
+            console.info(f"{video} is {how} archived in {output}; use --overwrite to redo it")
             return EXIT_OK
         with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
             report = args.desktop.report = execute(planned, on_event=progress.on_event)
@@ -319,22 +332,26 @@ def cmd_process(args: argparse.Namespace) -> int:
         if result.status is Status.CANCELLED:
             raise KeyboardInterrupt
         if result.status is Status.FAILED:
-            console.error(f"Could not archive {args.input}: {result.error}")
+            console.error(f"Could not archive {video}: {result.error}")
             console.hint(result.hint, args.log_file)
         elif result.status is Status.DEGRADED:
-            console.warning(f"archived {args.input}, but incomplete: {'; '.join(result.problems)}")
+            console.warning(f"archived {video}, but incomplete: {'; '.join(result.problems)}")
             console.detail("Incomplete archives are not marked complete; the next run redoes them")
         else:
-            console.info(f"Archived {args.input} in {result.output}", "ok")
+            console.info(f"Archived {video} in {result.output}", "ok")
         return report.exit_status(strict=args.strict)
-    if not args.input.is_dir():
-        raise UsageError(f"Input not found: {args.input}")
-
-    videos = find_videos(args.input, recursive=run.recursive, skip_dir=is_output_dir)
-    if not videos:
-        console.info(f"No videos found in {args.input}")
+    if not len(inputs):
+        console.info("No videos found")
         return EXIT_OK
-    planned = plan(ARCHIVE, videos, options, run, source=args.input, speed=speed)
+    planned = plan(
+        ARCHIVE,
+        inputs.videos,
+        options,
+        run,
+        source=inputs.roots,
+        invalid=inputs.invalid,
+        speed=speed,
+    )
     print_plan(console, planned, WORDING, items=args.dry_run)
     if args.dry_run:
         return EXIT_OK
@@ -351,17 +368,39 @@ def cmd_process(args: argparse.Namespace) -> int:
     if report.degraded:
         console.detail("Incomplete archives are not marked complete; the next run redoes them")
     resume = "run the same command again (archived videos are skipped)"
-    title = f"{APP_NAME} process {args.input}"
+    title = f"{APP_NAME} process {describe_inputs(args)}"
     report_run_lists(console, report, APP_NAME, title=title, resume=resume)
     return report.exit_status(strict=args.strict)
 
 
 def cmd_fingerprint(args: argparse.Namespace) -> int:
-    info = probe(args.video)
-    output = args.output or args.video.with_name(f"{args.video.name}.fingerprint.json")
-    save_fingerprint(compute_fingerprint(info), output)
-    args.console.info(f"Fingerprint saved to {output}", "ok")
-    return 0
+    console: Console = args.console
+    require_inputs(args)
+    inputs = collect_inputs(args.paths, args.input_list, recursive=args.recursive)
+    for warning in inputs.warnings:
+        console.warning(warning)
+    if args.output is not None and len(inputs) != 1:
+        raise UsageError("-o names one fingerprint file; give a single video")
+    failed = 0
+    for video in inputs.videos:
+        output = args.output or video.with_name(f"{video.name}.fingerprint.json")
+        try:
+            save_fingerprint(compute_fingerprint(probe(video)), output)
+        except (OSError, ValueError, RuntimeError) as exc:
+            if inputs.single_file:
+                raise
+            logger.error("Fingerprint of %s failed: %s", video, exc, exc_info=True)
+            console.error(f"{video}: {exc}")
+            console.hint(hint_for(exc), None)
+            failed += 1
+            continue
+        console.info(f"Fingerprint saved to {output}", "ok")
+    for entry in inputs.invalid:
+        console.error(f"{entry.path}: {entry.reason}")
+        failed += 1
+    if failed and not inputs.single_file:
+        console.detail(f"Details: {args.log_file}", "dim")
+    return EXIT_FAILED if failed else EXIT_OK
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -407,10 +446,20 @@ def cmd_status(args: argparse.Namespace) -> int:
     output = args.output
     if output is None:
         output = load_config(find_config(args.config)).run.output
+    require_inputs(args)
+    paths = [path for text in args.paths for path in expand_path(text)]
+    for source in args.input_list:
+        listed, warnings = read_input_list(source)
+        paths += listed
+        for warning in warnings:
+            args.console.warning(warning)
     checks = []
-    for path in args.paths:
+    for path in dict.fromkeys(paths):
         if not path.exists():
-            raise UsageError(f"Not found: {path}")
+            missing = ArchiveCheck(path.parent, path.stem, path, ArchiveStatus.MISSING)
+            missing.details.append("not found")
+            checks.append(missing)
+            continue
         checks += find_archives(path, output=output, recursive=args.recursive, full=args.full)
     console: Console = args.console
     console.record(archives=[archive_document(check) for check in checks])
@@ -447,6 +496,12 @@ def archive_document(check: ArchiveCheck) -> dict[str, object]:
         "status": check.status.value.replace(" ", "_"),
         "details": check.details,
     }
+
+
+def describe_inputs(args: argparse.Namespace) -> str:
+    """The inputs of the command line, for the title of the lists of videos to retry."""
+    parts = [*args.paths, *(f"--input-list {name}" for name in args.input_list)]
+    return " ".join(parts)
 
 
 def print_comparison(title: str, files: list[tuple[str, object]], report: Comparison) -> None:
