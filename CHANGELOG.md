@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Performance
+
+- Precise frame sampling decodes on from the previous frame instead of seeking back to a
+  keyframe when the next timestamp is close, so frames are not decoded twice. Same frames as
+  before; `vsr archive` of a 5 s clip goes from 21 s to 6 s, and a batch of 7 screen recordings
+  (66 min) from 81 s to 64 s.
+
 ### Fixed
 
 - `--input-list` outside Windows: paths written with backslashes, as in a list made on Windows,
