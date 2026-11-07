@@ -77,7 +77,13 @@ movie_summary\
 
 ## Installation
 
-You need Python 3.12 or later and [uv](https://docs.astral.sh/uv/). FFmpeg comes inside
+**On Windows, without Python:** download `video-tools-<version>-windows-x64.zip` from the
+[latest release](https://github.com/dbarretol/video-tools/releases/latest), unzip it anywhere and
+add that folder to your `PATH` (or run the programs from it). It holds `vtools.exe`, `vthumb.exe`
+and `vsr.exe`, which share the `_internal` folder next to them. The programs are not signed, so
+Windows SmartScreen may ask for confirmation the first time.
+
+**From the source,** on any system: you need Python 3.12 or later and [uv](https://docs.astral.sh/uv/). FFmpeg comes inside
 [PyAV](https://pyav.basswood-io.com/), so there is nothing else to install.
 
 ```bash
@@ -273,6 +279,21 @@ makes them again.
 
 Every pull request and every push to `dev` or `main` runs the same checks on GitHub Actions
 ([ci.yml](.github/workflows/ci.yml)): the lock file, ruff, and the tests on Windows and Linux.
+
+The Windows executables are built with [PyInstaller](https://pyinstaller.org/) from
+[packaging/video-tools.spec](packaging/video-tools.spec):
+
+```bash
+uv sync --group build
+uv run pyinstaller packaging/video-tools.spec --noconfirm   # dist/video-tools/
+uv run python packaging/smoke_test.py dist/video-tools      # run them on a generated clip
+```
+
+Every push to `main` does the same in [release.yml](.github/workflows/release.yml) and, when the
+version of the packages is new, publishes the zip in a release tagged `v<version>` with that
+version's section of the changelog as its notes. Releasing is therefore: set the new version in
+every `packages/*/pyproject.toml`, rename `## Unreleased` in the changelog to that version, and
+merge to `main`.
 
 To time the tools on your own videos:
 

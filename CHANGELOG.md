@@ -32,6 +32,13 @@
   `main`: the lock file must be current, ruff lint and format must pass, and the tests run on
   Windows and Linux. Dependabot keeps the actions up to date.
 
+### Windows executables
+
+- `vtools.exe`, `vthumb.exe` and `vsr.exe` in one zip, for Windows without Python: every push to
+  `main` builds them with PyInstaller, runs them on a generated clip and, for a new version,
+  attaches the zip to a GitHub release. They start faster than the installed commands (`vsr --help`
+  in 0.3 s instead of 0.46 s) and give the same outputs.
+
 ## 0.2.0 - 2026-11-06
 
 Breaking changes; the old forms keep working for one version, with a warning that shows the new

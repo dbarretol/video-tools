@@ -1,0 +1,109 @@
+name: Release
+
+# Every push to main builds the Windows executables and, if the version is new, publishes them
+# in a GitHub release tagged v<version>, with its section of CHANGELOG.md as the notes.
+# Pull requests that touch the build only build and test it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - packaging/**
+      - .github/workflows/release.yml
+      - uv.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.9.26"
+
+jobs:
+  build:
+    name: Build (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked --group build
+      - name: Read the version
+        id: version
+        shell: bash
+        run: |
+          version=$(uv run python packaging/version.py)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version"
+      - name: Build the executables
+        run: uv run pyinstaller packaging/video-tools.spec --noconfirm --distpath dist --workpath build
+      - name: Smoke test
+        run: uv run python packaging/smoke_test.py dist/video-tools
+      - name: Zip
+        shell: pwsh
+        run: |
+          $name = "video-tools-${{ steps.version.outputs.version }}-windows-x64"
+          Rename-Item dist/video-tools $name
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x64
+          path: dist
+      - name: Publish
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "::notice::Release $tag already exists; bump the version to publish a new one."
+            exit 0
+          fi
+          # An existing tag must be this commit: the executables are built from it.
+          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            tagged=$(git rev-list -n 1 "$tag")
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag is commit $tagged, not this one; bump the version."
+              exit 1
+            fi
+          fi
+          # The notes are the section of CHANGELOG.md for this version.
+          awk -v version="$VERSION" '
+            $0 ~ "^## " { if (found) exit; found = index($0, "## " version " ") == 1 || $0 == "## " version; next }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $VERSION."
+            exit 1
+          fi
+          gh release create "$tag" dist/*.zip --target "$GITHUB_SHA" --title "video-tools $VERSION" --notes-file notes.md
