@@ -12,14 +12,14 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 
+import videosemanticreducer
+import videothumb
+import vtools
 from videoconsole import pause_if_alone
 from videocore import EXIT_OK, EXIT_USAGE
 from videocore.commands import help_epilog, with_help
-from videosemanticreducer import __version__ as vsr_version
 from videosemanticreducer import cli as vsr
-from videothumb import __version__ as thumb_version
 from videothumb import cli as thumb
-from vtools import __version__
 
 THUMB_COMMANDS = {
     "sheet": "a contact sheet per video",
@@ -68,7 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_OK
     if argv[0] == "--version":
         print(
-            f"vtools {__version__} (videothumb {thumb_version}, videosemanticreducer {vsr_version})"
+            f"vtools {vtools.__version__} (videothumb {videothumb.__version__}, "
+            f"videosemanticreducer {videosemanticreducer.__version__})"
         )
         return EXIT_OK
     command, rest = argv[0], argv[1:]
