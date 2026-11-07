@@ -1,0 +1,65 @@
+# Benchmark targets for benchmarks/bench.py. Paths are relative to this file.
+
+[[target]]
+name = "videocore-sampling"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videocore_sampling.py"
+
+[[target]]
+name = "vsr-pipeline"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/vsr_pipeline.py"
+
+[[target]]
+name = "videothumb-sheet"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "sheet"]
+
+[[target]]
+name = "videothumb-sheet-precise"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "sheet", "--precise"]
+
+[[target]]
+name = "videothumb-frames"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "frames", "--count", "10"]
+
+[[target]]
+name = "videothumb-frames-precise"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "frames", "--count", "10", "--precise"]
+
+[[target]]
+name = "videothumb-pack"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/videothumb_jobs.py"
+args = ["--mode", "pack"]
+
+[[target]]
+name = "vsr-batch"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "vsr"]
+
+[[target]]
+name = "vsr-batch-serial"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "vsr", "--workers", "1"]
+
+[[target]]
+name = "videothumb-sheet-batch"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "videothumb-sheet"]
+
+[[target]]
+name = "videothumb-sheet-batch-serial"
+python = "../.venv/Scripts/python.exe"
+driver = "drivers/batch.py"
+args = ["--app", "videothumb-sheet", "--workers", "1"]

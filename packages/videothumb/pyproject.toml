@@ -1,0 +1,26 @@
+[project]
+name = "videothumb"
+version = "0.3.0"
+description = "Contact sheets, frames and ZIP packs from videos (CLI and desktop app)."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "dbarretol", email = "57958754+dbarretol@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "videoconsole[notify]",
+    "videocore",
+]
+
+[project.scripts]
+videothumb = "videothumb.cli:main"
+vthumb = "videothumb.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+videocore = { workspace = true }
+videoconsole = { workspace = true }

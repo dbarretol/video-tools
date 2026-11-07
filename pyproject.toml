@@ -1,0 +1,27 @@
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+build = [
+    "pyinstaller>=6.22.3",
+]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["videocore", "videoconsole", "videothumb", "videosemanticreducer", "vtools"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages"]
+addopts = ["--import-mode=importlib"]
+# A test that hangs prints where every thread is, instead of waiting for the CI time limit.
+faulthandler_timeout = 120
