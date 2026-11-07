@@ -8,6 +8,7 @@ from pathlib import Path
 
 from videocore import (
     BatchResult,
+    Footage,
     ItemResult,
     OutputSlot,
     RunOptions,
@@ -76,7 +77,7 @@ class SheetTask:
     def cleanup(self, output: Path) -> None:
         part_path(output).unlink(missing_ok=True)
 
-    def estimate(self, duration: float, options: SheetOptions) -> float | None:
+    def estimate(self, footage: Footage, options: SheetOptions) -> float | None:
         if options.sampling == "precise":
             return None
         return 0.3 + options.count * SECONDS_PER_SHEET_FRAME
@@ -114,7 +115,7 @@ class SnapshotsTask:
     def cleanup(self, output: Path) -> None:
         remove_partials(output)
 
-    def estimate(self, duration: float, options: SnapshotOptions) -> float | None:
+    def estimate(self, footage: Footage, options: SnapshotOptions) -> float | None:
         if options.sampling == "precise":
             return None
         return 0.3 + options.count * SECONDS_PER_SNAPSHOT
@@ -159,7 +160,7 @@ class PackTask:
     def cleanup(self, output: Path) -> None:
         part_path(output).unlink(missing_ok=True)
 
-    def estimate(self, duration: float, options: PackOptions) -> float | None:
+    def estimate(self, footage: Footage, options: PackOptions) -> float | None:
         if options.sampling == "precise":
             return None
         seconds = 0.3 + options.frame_count * SECONDS_PER_SNAPSHOT
