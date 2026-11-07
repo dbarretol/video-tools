@@ -8,6 +8,15 @@
   keyframe when the next timestamp is close, so frames are not decoded twice. Same frames as
   before; `vsr archive` of a 5 s clip goes from 21 s to 6 s, and a batch of 7 screen recordings
   (66 min) from 81 s to 64 s.
+- Better time estimates. Planning a video now also reads its size, frame rate and keyframe
+  interval (from the packets of its first minute, a few milliseconds), and `vsr archive` estimates
+  with a cost model fitted on 38 real videos: 87% within 25% of the real time, where the old one
+  managed 24%. For the reference batch it says 59 s (real 63 s) instead of 19 s. Parallel videos
+  are expected to gain less (`N**0.3` instead of `N**0.7`), as measured. Times between 1 and 10
+  minutes are shown to 10 s, e.g. "about 1 min 30 s" instead of "about 2 min".
+- `videocore`: `Task.estimate` takes a `Footage` (duration, size, frame rate, keyframe interval)
+  instead of the duration; `PlannedItem.footage` replaces the `duration` field, which remains as a
+  property.
 
 ### Fixed
 
