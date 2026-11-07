@@ -1,7 +1,5 @@
 """Shared video primitives for video-tools."""
 
-from importlib.metadata import version
-
 from videocore.batch import BatchResult, default_workers, find_videos, run_parallel
 from videocore.errors import (
     EXIT_DEGRADED,
@@ -53,8 +51,6 @@ from videocore.outputs import (
 from videocore.probe import AudioStreamInfo, VideoInfo, VideoStreamInfo, format_hms, probe
 from videocore.progress import Cancelled, CancelToken, ProgressEvent
 from videocore.state import State
-
-__version__ = version("videocore")
 
 __all__ = [
     "Inputs",
@@ -113,3 +109,13 @@ __all__ = [
     "sample_frames",
     "write_run_lists",
 ]
+
+
+def __getattr__(name: str) -> str:
+    # The version is read from the installed metadata only when asked for:
+    # importlib.metadata takes longer to import than most commands take to start.
+    if name == "__version__":
+        from importlib.metadata import version
+
+        return version("videocore")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

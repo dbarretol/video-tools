@@ -11,6 +11,7 @@ front of the arguments. A command name always wins over a file of that name;
 
 from __future__ import annotations
 
+import argparse
 import textwrap
 from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
@@ -23,6 +24,25 @@ HELP_ALIASES = frozenset({"/?", "-?", "/help"})
 """Other ways of writing ``--help``, as Windows programs accept them."""
 HELP_WIDTH = 79
 EXAMPLE_COLUMN = 40
+
+
+class VersionAction(argparse.Action):
+    """``--version`` that builds its text only when used, e.g. from installed metadata."""
+
+    def __init__(
+        self,
+        option_strings: Sequence[str],
+        dest: str = argparse.SUPPRESS,
+        *,
+        version: Callable[[], str],
+        help: str = "show the version and exit",  # noqa: A002 - argparse's name
+    ) -> None:
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, help=help)
+        self.version = version
+
+    def __call__(self, parser: argparse.ArgumentParser, *args: Any) -> None:
+        print(f"{parser.prog} {self.version()}")  # to stdout, like argparse's own
+        parser.exit()
 
 
 def with_help(
