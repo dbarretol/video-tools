@@ -35,8 +35,8 @@ class Task:
     def state(self, video, output, name, options):
         return Status.SKIPPED if output.exists() else None
 
-    def estimate(self, duration, options):
-        return duration
+    def estimate(self, footage, options):
+        return footage.duration
 
 
 @pytest.fixture(autouse=True)

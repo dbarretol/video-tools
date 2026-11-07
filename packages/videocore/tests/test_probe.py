@@ -50,3 +50,12 @@ def test_probe_invalid_file(tmp_path):
 )
 def test_format_hms(seconds, expected):
     assert format_hms(seconds) == expected
+
+
+def test_keyframe_interval(video_only, spec, tmp_path):
+    from videocore.probe import keyframe_interval
+
+    assert keyframe_interval(video_only) == pytest.approx(spec.gop / spec.fps)
+    bogus = tmp_path / "bogus.mp4"
+    bogus.write_bytes(b"not a video")
+    assert keyframe_interval(bogus) is None

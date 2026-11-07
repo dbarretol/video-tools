@@ -71,3 +71,17 @@ def test_a_real_run(clip, tmp_path, capsys):
     args = ["archive", str(clip), "-o", str(archive), "-n", "4", "--grid", "2x2"]
     assert cli.main(["-q", *args]) == 0
     assert cli.main(["status", str(clip), "-o", str(archive)]) == 0
+
+
+def test_starting_does_not_import_what_only_some_commands_need():
+    import subprocess
+    import sys
+
+    # numpy (through imagehash) is only for fingerprints, yaml only for config
+    # files, importlib.metadata only for --version: each would slow every start.
+    code = (
+        "import sys, vtools.cli; "
+        "print(sorted({'numpy', 'imagehash', 'yaml', 'importlib.metadata'} & set(sys.modules)))"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert done.stdout.strip() == "[]"

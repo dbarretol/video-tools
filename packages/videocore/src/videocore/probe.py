@@ -98,6 +98,48 @@ def probe(path: str | os.PathLike[str]) -> VideoInfo:
         )
 
 
+KEYFRAME_SCAN_SECONDS = 60.0
+"""How much of the start of a video `keyframe_interval` reads at most."""
+KEYFRAME_SCAN_COUNT = 4
+
+
+def keyframe_interval(path: str | os.PathLike[str]) -> float | None:
+    """Seconds between keyframes, from the packets of the first minute; nothing is decoded.
+
+    The largest gap among the first few keyframes, so a stray keyframe right after
+    the first one does not hide a long interval. When the scan stops before finding
+    them all (the first minute, or the video, ended), the interval it stopped in
+    counts for what was read of it.
+    None when the file cannot be read or has no video. Reads well under a few MB.
+    """
+    try:
+        with av.open(os.fspath(path)) as container:
+            if not container.streams.video:
+                return None
+            stream = container.streams.video[0]
+            keys: list[float] = []
+            last = None
+            for packet in container.demux(stream):
+                if packet.pts is None or packet.time_base is None:
+                    continue
+                last = float(packet.pts * packet.time_base)
+                if packet.is_keyframe:
+                    keys.append(last)
+                    if len(keys) == KEYFRAME_SCAN_COUNT:
+                        break
+                if keys and last - keys[0] > KEYFRAME_SCAN_SECONDS:
+                    break
+    except av.FFmpegError:
+        return None
+    if not keys:
+        return None
+    gaps = [b - a for a, b in zip(keys, keys[1:], strict=False)]
+    if len(keys) < KEYFRAME_SCAN_COUNT:
+        gaps.append(last - keys[-1])  # stopped inside an interval: at least this long
+    interval = max(gaps)
+    return interval if interval > 0 else None
+
+
 def _container_duration(container: av.container.InputContainer) -> float:
     if container.duration is not None:
         return container.duration / av.time_base

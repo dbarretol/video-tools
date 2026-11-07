@@ -5,7 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from videocore import OutputCollisionError, OutputSlot, RunOptions, Status, execute, jobs, plan
+from videocore import (
+    Footage,
+    OutputCollisionError,
+    OutputSlot,
+    RunOptions,
+    Status,
+    execute,
+    jobs,
+    plan,
+)
 from videocore.batch import is_offline
 
 
@@ -50,13 +59,13 @@ class FakeTask:
     def cleanup(self, output: Path) -> None:
         self.cleaned.append(output)
 
-    def estimate(self, duration: float, options: Options) -> float | None:
+    def estimate(self, footage: Footage, options: Options) -> float | None:
         return self.seconds
 
 
 @pytest.fixture
 def videos(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, "_duration", lambda video: 60.0)
+    monkeypatch.setattr(jobs, "_footage", lambda video: Footage(60.0))
     paths = [tmp_path / name for name in ("a.mp4", "b.mp4", "bad.mp4")]
     for path in paths:
         path.write_bytes(b"x")
@@ -157,16 +166,44 @@ def test_eta_is_unknown_without_an_estimate(videos, monkeypatch):
     assert planned.eta() is None
     assert "estimated" not in planned.summary()[1]
 
-    monkeypatch.setattr(jobs, "_duration", lambda video: None)
+    monkeypatch.setattr(jobs, "_footage", lambda video: None)
     planned = plan(FakeTask(), videos, Options())
     assert planned.eta() is None
     assert planned.summary()[1] == "Video to process: unknown length"
 
-    monkeypatch.setattr(jobs, "_duration", lambda video: None if video.name == "bad.mp4" else 90.0)
+    monkeypatch.setattr(
+        jobs, "_footage", lambda video: None if video.name == "bad.mp4" else Footage(90.0)
+    )
     line = plan(FakeTask(), videos, Options(), RunOptions(workers=1)).summary()[1]
     assert line == (
         "Video to process: 00:03:00 plus 1 of unknown length; "
         "estimated time: about 4 s with 1 in parallel"
+    )
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [
+        (0.2, "about 1 s"),
+        (42, "about 42 s"),
+        (84, "about 1 min 20 s"),
+        (92, "about 1 min 30 s"),
+        (118, "about 2 min"),
+        (599, "about 10 min"),
+        (725, "about 12 min"),
+        (7800, "about 2 h 10 min"),
+    ],
+)
+def test_rough_times(seconds, text):
+    assert jobs._rough(seconds) == text
+
+
+def test_planning_reads_the_size_and_rate(video_only, tmp_path):
+    run = RunOptions(output=tmp_path)
+    (item,) = plan(FakeTask(), [video_only], Options(), run).items
+    assert item.footage.width > 0 and item.footage.fps > 0
+    assert item.footage.pixel_rate == pytest.approx(
+        item.footage.width * item.footage.height * item.footage.fps / 1e6
     )
 
 
@@ -190,7 +227,7 @@ def test_report_measures_the_speed_against_the_estimates(videos, monkeypatch):
 
     # Videos run in parallel take longer each; that is not the task being slower.
     monkeypatch.setattr(jobs.Plan, "workers", property(lambda self: 4))
-    assert report.measured_speed() == pytest.approx(0.5 / 4**0.3)
+    assert report.measured_speed() == pytest.approx(0.5 / 4 ** (1 - jobs.PARALLEL_GAIN))
 
     unknown = execute(plan(FakeTask(seconds=4.0), videos, Options(), measure=False))
     assert unknown.measured_speed() is None  # no durations
@@ -199,7 +236,7 @@ def test_report_measures_the_speed_against_the_estimates(videos, monkeypatch):
 
 def test_cloud_only_files_are_not_read_and_are_reported(videos, monkeypatch):
     read = []
-    monkeypatch.setattr(jobs, "_duration", lambda video: read.append(video) or 60.0)
+    monkeypatch.setattr(jobs, "_footage", lambda video: read.append(video) or Footage(60.0))
     monkeypatch.setattr(jobs, "is_offline", lambda video: video.name == "b.mp4")
 
     planned = plan(FakeTask(), videos, Options())

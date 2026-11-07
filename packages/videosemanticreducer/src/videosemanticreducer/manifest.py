@@ -19,8 +19,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import videosemanticreducer
 from videocore import VideoInfo, atomic_write
-from videosemanticreducer import __version__
 from videosemanticreducer.fingerprint import compute_sha256
 
 MANIFEST_VERSION = 1
@@ -62,7 +62,7 @@ def build_manifest(
     return {
         "manifest_version": MANIFEST_VERSION,
         "tool": "videosemanticreducer",
-        "tool_version": __version__,
+        "tool_version": videosemanticreducer.__version__,
         "created": datetime.now(UTC).isoformat(timespec="seconds"),
         "source": {
             "filename": source.path.name,

@@ -32,7 +32,7 @@ from videocore.inputs import InvalidInput
 from videocore.logging_setup import default_log_dir
 from videocore.options import option, validate
 from videocore.outputs import OutputSlot, plan_outputs
-from videocore.probe import format_hms, probe
+from videocore.probe import format_hms, keyframe_interval, probe
 from videocore.progress import ProgressEvent
 
 logger = logging.getLogger(__name__)
@@ -41,8 +41,31 @@ PROBE_THREADS = 8
 INVALID_HINT = "check the path; if it is in an input list, fix or remove that line"
 KEPT_RUN_LISTS = 20
 """Runs whose retry lists are kept in the runs folder; older ones are deleted."""
-PARALLEL_GAIN = 0.7
-"""N videos in parallel finish about N**PARALLEL_GAIN times faster than one after another."""
+PARALLEL_GAIN = 0.3
+"""N videos in parallel finish about N**PARALLEL_GAIN times faster than one after another.
+
+Measured on a 4-core laptop with 4 workers: 0.27 for archives, 0.24 for contact
+sheets. One video already keeps every core busy (threaded decoding and encoding),
+so parallel videos mostly hide each other's waits."""
+
+
+@dataclass(frozen=True)
+class Footage:
+    """What a time estimate knows about a video, read when it is planned."""
+
+    duration: float
+    """Seconds."""
+    width: int = 0
+    height: int = 0
+    fps: float = 0.0
+    """0 when unknown, like the size."""
+    keyframe_interval: float | None = None
+    """Seconds between keyframes (see ``videocore.probe.keyframe_interval``)."""
+
+    @property
+    def pixel_rate(self) -> float:
+        """Millions of pixels per second of video; 0 when the size or rate is unknown."""
+        return self.width * self.height * self.fps / 1e6
 
 
 class Status(StrEnum):
@@ -123,8 +146,8 @@ class Task[T](Protocol):
         """Remove the unfinished files a killed run leaves in `output`."""
         ...
 
-    def estimate(self, duration: float, options: T) -> float | None:
-        """Rough seconds to process a video of `duration` seconds with one worker."""
+    def estimate(self, footage: Footage, options: T) -> float | None:
+        """Rough seconds to process a video like `footage` with one worker."""
         ...
 
 
@@ -139,14 +162,19 @@ class PlannedItem:
     when it cannot be processed (see `error`)."""
     offline: bool = False
     """Only in the cloud (e.g. a OneDrive placeholder): reading it downloads it."""
-    duration: float | None = None
-    """Seconds of video, measured for pending items only; None when unknown."""
+    footage: Footage | None = None
+    """Its length, size and frame rate, measured for pending items only; None when unknown."""
     error: str | None = None
     """Why a FAILED item cannot be processed, e.g. "not found"."""
 
     @property
     def pending(self) -> bool:
         return self.state is None
+
+    @property
+    def duration(self) -> float | None:
+        """Seconds of video; None when unknown."""
+        return self.footage.duration if self.footage else None
 
 
 @dataclass(frozen=True)
@@ -184,9 +212,9 @@ class Plan[T]:
         """
         estimates = []
         for item in self.pending:
-            if item.duration is None:
+            if item.footage is None:
                 continue
-            estimate = self.task.estimate(item.duration, self.options)
+            estimate = self.task.estimate(item.footage, self.options)
             if estimate is None:
                 return None
             estimates.append(estimate * self.speed)
@@ -377,7 +405,7 @@ class RunReport:
             done = result.status in (Status.OK, Status.DEGRADED)
             if not done or result.seconds is None or not item.duration:
                 continue
-            estimate = self.plan.task.estimate(item.duration, self.plan.options)
+            estimate = self.plan.task.estimate(item.footage, self.plan.options)
             if not estimate:
                 continue
             took += result.seconds / slowdown
@@ -571,25 +599,35 @@ def _measure(items: list[PlannedItem]) -> list[PlannedItem]:
     if not targets:
         return items
     with ThreadPoolExecutor(max_workers=min(PROBE_THREADS, len(targets))) as pool:
-        durations = list(pool.map(lambda i: _duration(items[i].video), targets))
+        footages = list(pool.map(lambda i: _footage(items[i].video), targets))
     measured = list(items)
-    for index, duration in zip(targets, durations, strict=True):
-        measured[index] = dataclasses.replace(items[index], duration=duration)
+    for index, footage in zip(targets, footages, strict=True):
+        measured[index] = dataclasses.replace(items[index], footage=footage)
     return measured
 
 
-def _duration(video: Path) -> float | None:
+def _footage(video: Path) -> Footage | None:
     try:
-        return probe(video).duration or None
+        info = probe(video)
+        if not info.duration:
+            return None
+        stream = info.video
+        if stream is None:
+            return Footage(info.duration)
+        interval = keyframe_interval(video)
+        return Footage(info.duration, stream.width, stream.height, stream.fps, interval)
     except Exception:  # noqa: BLE001 - unreadable files fail later, with a proper error
         logger.debug("Could not read the duration of %s", video, exc_info=True)
         return None
 
 
 def _rough(seconds: float) -> str:
-    """'about 40 s', 'about 12 min', 'about 2 h 10 min'."""
+    """'about 40 s', 'about 1 min 30 s', 'about 12 min', 'about 2 h 10 min'."""
     if seconds < 60:
         return f"about {max(1, round(seconds))} s"
+    if seconds < 600:
+        minutes, rest = divmod(round(seconds / 10) * 10, 60)
+        return f"about {minutes} min" + (f" {rest} s" if rest else "")
     minutes = round(seconds / 60)
     if minutes < 60:
         return f"about {minutes} min"

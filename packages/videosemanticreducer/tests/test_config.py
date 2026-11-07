@@ -133,7 +133,7 @@ def test_process_uses_config_and_flags_override_it(clip, tmp_path):
     assert (out / "clip.fingerprint.json").is_file()
 
     # Each run teaches how fast archiving is here, for the next estimates.
-    assert State("videosemanticreducer").speed("archive") != 1.0
+    assert State("videosemanticreducer").speed("archive.2") != 1.0
 
 
 def test_process_with_invalid_config_fails_cleanly(clip, tmp_path):

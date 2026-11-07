@@ -32,8 +32,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from videocore.errors import UsageError
 from videocore.options import Option, options_of, parse_mapping
 from videocore.outputs import atomic_write
@@ -159,6 +157,8 @@ class AppConfig:
 
     def parse(self, text: str, path: Path) -> Values:
         """Like `load`, from the text of `path`; relative paths are relative to `path`."""
+        import yaml  # only when there is a config file: it slows every start down
+
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as exc:
@@ -424,6 +424,8 @@ def _parse_value(opt: Option, text: str) -> Any:
         return None
     if opt.kind in (str, Path):
         return text
+    import yaml
+
     try:
         return yaml.safe_load(text)
     except yaml.YAMLError:
@@ -431,6 +433,8 @@ def _parse_value(opt: Option, text: str) -> Any:
 
 
 def _dump(value: Any) -> str:
+    import yaml
+
     if isinstance(value, Path):
         value = str(value)
     rendered = yaml.safe_dump(value, default_flow_style=True)
@@ -496,6 +500,8 @@ def _section_name(row: str) -> str | None:
 
 def _trailing_comment(rest: str) -> str:
     """The comment after a YAML value, with the spaces before it; empty if there is none."""
+    import yaml
+
     try:
         whole = yaml.safe_load(f"k:{rest}")
     except yaml.YAMLError:

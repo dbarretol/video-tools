@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import videothumb
 from videoconsole import (
     Console,
     ConsoleOptions,
@@ -44,6 +45,7 @@ from videocore import (
 )
 from videocore.commands import (
     HELP_FLAGS,
+    VersionAction,
     configured,
     help_epilog,
     with_default_task,
@@ -52,7 +54,6 @@ from videocore.commands import (
 from videocore.config import Values, add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
-from videothumb import __version__
 from videothumb.common import APP_NAME, Mode
 from videothumb.config import CONFIG, CONSOLE_SECTION, RUN_SECTION
 from videothumb.jobs import TASKS, Options, default_output
@@ -87,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--version", action=VersionAction, version=lambda: videothumb.__version__)
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     common = common_options()
     for mode, help_text in COMMANDS.items():

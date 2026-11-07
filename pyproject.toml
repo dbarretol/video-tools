@@ -20,3 +20,5 @@ known-first-party = ["videocore", "videoconsole", "videothumb", "videosemanticre
 [tool.pytest.ini_options]
 testpaths = ["packages"]
 addopts = ["--import-mode=importlib"]
+# A test that hangs prints where every thread is, instead of waiting for the CI time limit.
+faulthandler_timeout = 120

@@ -28,6 +28,7 @@ from pathlib import Path
 from PIL import Image
 
 from videocore import (
+    Footage,
     NoFramesError,
     NoVideoStreamError,
     OutputSlot,
@@ -42,6 +43,7 @@ from videocore import (
     remove_partials,
     sample_frames,
 )
+from videocore.frames import FAR_KEYFRAME_SECONDS
 from videocore.options import option, options_of, validate
 from videocore.verify import FrameCount, check_file, check_image, check_video
 from videosemanticreducer import fingerprint as fp
@@ -363,10 +365,22 @@ def _slot_dir(slot: OutputSlot) -> Path:
     return slot.folder / f"{slot.name}{OUTPUT_DIR_SUFFIX}"
 
 
-# Rough single-worker cost of an archive with the default options: a fixed part
-# for the summary, grid and hashes plus reading the whole file for the SHA-256.
-ARCHIVE_FIXED_SECONDS = 8.0
-ARCHIVE_SECONDS_PER_VIDEO_SECOND = 0.004
+# Single-worker cost model of an archive, fitted on 38 real videos (720p to 1080p,
+# 24 to 60 fps, keyframes every 2 to 36 s, 5 s to 66 min): 87% within 25% of the
+# measured time. Each run also corrects it for the computer (see `Plan.speed`).
+ARCHIVE_BASE_SECONDS = 3.9
+"""Hashes, SHA-256, info card, files: what does not grow with the snapshots."""
+ARCHIVE_SECONDS_PER_MEGAPIXEL = 3.8
+"""Per megapixel of frame for the default 150 snapshots: one keyframe each, plus encoding."""
+ARCHIVE_SECONDS_PER_DECODED_GIGAPIXEL = 0.82
+"""Decoding frames one after another, for the snapshots that need precise sampling."""
+DEFAULT_KEYFRAME_INTERVAL = 4.0
+"""Assumed when it could not be read: common in screen recordings and downloads."""
+UNKNOWN_FOOTAGE = (1280, 720, 30.0)
+"""Width, height and frame rate assumed when they are unknown."""
+ARCHIVE_SPEED_KEY = "archive.2"
+"""Where the speed of this computer is learned (see ``videocore.State.speed``).
+Changed with the cost model, so a speed learned against the old one is not reused."""
 
 
 @dataclass(frozen=True)
@@ -395,9 +409,35 @@ class ArchiveTask:
     def cleanup(self, output: Path) -> None:
         remove_partials(output)
 
-    def estimate(self, duration: float, options: ProcessOptions) -> float | None:
-        scale = options.num_snapshots / 150 if options.summary else 0.3
-        return ARCHIVE_FIXED_SECONDS * scale + duration * ARCHIVE_SECONDS_PER_VIDEO_SECOND
+    def estimate(self, footage: Footage, options: ProcessOptions) -> float | None:
+        return estimate_archive(footage, options)
+
+
+def estimate_archive(footage: Footage, options: ProcessOptions) -> float:
+    """Rough seconds to archive a video like `footage` with one worker.
+
+    Snapshots come from keyframes, cheap one by one; those that would repeat a
+    keyframe (keyframes further apart than the snapshots) or fall far from it
+    are decoded precisely, which means decoding the frames in between: that
+    part grows with the pixels per second and the keyframe interval, not with
+    the length of the video beyond about `snapshots` x interval.
+    """
+    width, height, fps = (
+        (footage.width, footage.height, footage.fps) if footage.pixel_rate else UNKNOWN_FOOTAGE
+    )
+    interval = footage.keyframe_interval or DEFAULT_KEYFRAME_INTERVAL
+    count = options.num_snapshots if options.summary else options.sheet_columns * options.sheet_rows
+    duration = max(footage.duration, 0.0)
+    spacing = duration / count
+    repeated = max(0.0, 1 - spacing / interval)
+    far = max(0.0, (interval - FAR_KEYFRAME_SECONDS) / interval)
+    decoded_seconds = min(1.0, repeated + far) * min(duration, count * interval / 2)
+    megapixels = width * height / 1e6
+    return (
+        ARCHIVE_BASE_SECONDS
+        + ARCHIVE_SECONDS_PER_MEGAPIXEL * megapixels * count / 150
+        + ARCHIVE_SECONDS_PER_DECODED_GIGAPIXEL * megapixels * fps * decoded_seconds / 1000
+    )
 
 
 ARCHIVE = ArchiveTask()

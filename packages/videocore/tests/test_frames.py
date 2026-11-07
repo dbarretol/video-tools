@@ -34,6 +34,28 @@ def test_keyframe_mode_returns_the_previous_keyframe(video_with_audio, spec, fra
     assert [frame_index(f) for f in frames] == expected
 
 
+def test_precise_mode_decodes_on_instead_of_seeking_back(video_only, frame_index, monkeypatch):
+    from videocore import frames as frames_module
+
+    seeks = []
+    real_seek = frames_module._Seeker._seek
+    monkeypatch.setattr(
+        frames_module._Seeker, "_seek", lambda self, ts: seeks.append(ts) or real_seek(self, ts)
+    )
+    timestamps = [i / 10 for i in range(20)] + [0.05, 1.2]  # every frame, then two again
+    frames = sample_frames(video_only, timestamps, mode="precise")
+    assert [frame_index(f) for f in frames] == [*range(20), 0, 12]
+    assert len(seeks) < len(timestamps) // 2
+
+    # Going back in time always seeks.
+    job = frames_module._Job(str(video_only), [1.5, 0.2], "precise", None, False)
+    seeker = job.open()
+    try:
+        assert [frame_index(seeker.frame(i)) for i in (0, 1)] == [15, 2]
+    finally:
+        seeker.close()
+
+
 def test_results_follow_input_order_even_if_unsorted(video_only, frame_index):
     frames = sample_frames(video_only, [1.5, 0.0, 0.8], mode="precise")
     assert [frame_index(f) for f in frames] == [15, 0, 8]

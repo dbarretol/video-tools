@@ -12,6 +12,7 @@ from typing import Any
 
 from rich.text import Text
 
+import videosemanticreducer
 from videoconsole import (
     Console,
     Desktop,
@@ -42,11 +43,16 @@ from videocore import (
     probe,
     read_input_list,
 )
-from videocore.commands import configured, help_epilog, with_default_task, with_help
+from videocore.commands import (
+    VersionAction,
+    configured,
+    help_epilog,
+    with_default_task,
+    with_help,
+)
 from videocore.config import add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
-from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
 from videosemanticreducer.config import (
     CONFIG,
@@ -60,6 +66,7 @@ from videosemanticreducer.config import (
 from videosemanticreducer.fingerprint import compute_fingerprint, load_fingerprint, save_fingerprint
 from videosemanticreducer.pipeline import (
     ARCHIVE,
+    ARCHIVE_SPEED_KEY,
     ProcessOptions,
     is_output_dir,
     resolve_output_dir,
@@ -114,7 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action=VersionAction, version=lambda: videosemanticreducer.__version__
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
     parser.add_argument("-q", "--quiet", action="store_true", help=QUIET_HELP)
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -335,7 +344,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
     run = dataclasses.replace(settings.run, overwrite=args.overwrite)
     # How fast archiving ran here before, to estimate how long this run takes.
     state = State(APP_NAME)
-    speed = state.speed(ARCHIVE.name)
+    speed = state.speed(ARCHIVE_SPEED_KEY)
 
     require_inputs(args)
     inputs = collect_inputs(
@@ -359,7 +368,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
             return EXIT_OK
         with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
             report = args.desktop.report = execute(planned, on_event=progress.on_event)
-        state.learn_speed(ARCHIVE.name, report.measured_speed())
+        state.learn_speed(ARCHIVE_SPEED_KEY, report.measured_speed())
         record_report(console, report)
         (result,) = report.items
         if result.status is Status.CANCELLED:
@@ -395,7 +404,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
     with args.desktop.running(planned), RunProgress(console, planned, WORDING) as progress:
         report = execute(planned, on_progress=progress.on_progress, on_event=progress.on_event)
     args.desktop.report = report
-    state.learn_speed(ARCHIVE.name, report.measured_speed())
+    state.learn_speed(ARCHIVE_SPEED_KEY, report.measured_speed())
     print_report(console, report, WORDING, log_file=args.log_file)
     if report.count(Status.SKIPPED) or report.count(Status.OUTDATED):
         console.info("Use --overwrite to archive the skipped videos again")

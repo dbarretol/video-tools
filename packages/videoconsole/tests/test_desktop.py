@@ -26,8 +26,8 @@ class Task:
     def state(self, video, output, name, options):
         return None
 
-    def estimate(self, duration, options):
-        return duration
+    def estimate(self, footage, options):
+        return footage.duration
 
 
 class Kernel32:

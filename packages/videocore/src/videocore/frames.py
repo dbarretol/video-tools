@@ -266,35 +266,17 @@ class _Job:
         if self.draft:
             ctx.options = {**ctx.options, "skip_loop_filter": "all"}
 
-    def _decode_at(
-        self,
-        container: av.container.InputContainer,
-        stream: av.VideoStream,
-        ts: float,
-        frame_period: float,
-    ) -> av.VideoFrame | None:
-        if self.mode == "keyframe":
-            return next(container.decode(stream), None)
-
-        # Return the frame nearest to `ts`: the first one whose time is past ts - half a frame.
-        last = None
-        for frame in container.decode(stream):
-            if frame.time is None:
-                continue
-            last = frame
-            if frame.time >= ts - frame_period / 2:
-                return frame
-        # The data ended first. The last frame stands for a time just past it (the
-        # duration often ends a little after the last frame), not for one far past
-        # it: a cut file (half downloaded) says it lasts longer than its data, and
-        # those positions would all show the same last frame.
-        if last is not None and ts - last.time <= END_TOLERANCE_SECONDS:
-            return last
-        return None
-
 
 class _Seeker:
-    """An open container that decodes the frame of one timestamp at a time."""
+    """An open container that decodes the frame of one timestamp at a time.
+
+    In precise mode, a timestamp a little ahead of the previous one is reached by
+    decoding on from where the previous one stopped, without seeking: a seek
+    decodes again from the keyframe before the timestamp, which is wasted work
+    when samples are closer together than keyframes (short videos, screen
+    recordings). "A little" is what a seek has cost on average in this video,
+    measured as the time decoded from the keyframe to the timestamp.
+    """
 
     def __init__(
         self, job: _Job, container: av.container.InputContainer, stream: av.VideoStream
@@ -303,17 +285,69 @@ class _Seeker:
         self.container = container
         self.stream = stream
         self.frame_period = 1 / float(stream.average_rate or stream.guessed_rate or 30)
+        self._frames: Iterator[av.VideoFrame] | None = None
+        self._last: av.VideoFrame | None = None
+        self._last_ts: float | None = None
+        self._seek_cost = 0.0
+        self._seeks = 0
 
     def frame(self, index: int) -> Image.Image | None:
         ts = self.job.timestamps[index]
         try:
-            self.container.seek(
-                int(max(ts, 0) / self.stream.time_base), stream=self.stream, backward=True
-            )
-            frame = self.job._decode_at(self.container, self.stream, ts, self.frame_period)
+            if self.job.mode == "keyframe":
+                self._seek(ts)
+                frame = next(self._frames, None)
+            else:
+                frame = self._precise(ts)
         except av.FFmpegError:
+            self._frames = None
             return None
         return _to_image(frame, self.job.size) if frame is not None else None
+
+    def _seek(self, ts: float) -> None:
+        self.container.seek(
+            int(max(ts, 0) / self.stream.time_base), stream=self.stream, backward=True
+        )
+        self._frames = self.container.decode(self.stream)
+        self._last = None
+
+    def _precise(self, ts: float) -> av.VideoFrame | None:
+        """The frame nearest to `ts`: the first one whose time is past ts - half a frame."""
+        start = ts - self.frame_period / 2
+        last, previous_ts = self._last, self._last_ts
+        self._last_ts = ts
+        decode_on = (
+            self._frames is not None
+            and last is not None
+            and previous_ts is not None
+            and ts >= previous_ts
+            and self._seeks
+            and ts - last.time <= self._seek_cost / self._seeks
+        )
+        if decode_on and last.time >= start:
+            return last  # the previous timestamp's frame is also the nearest to this one
+        seeking = not decode_on
+        if seeking:
+            self._seek(ts)
+            last = None
+        for frame in self._frames:
+            if frame.time is None:
+                continue
+            if seeking:
+                self._seek_cost += max(ts - frame.time, 0.0)
+                self._seeks += 1
+                seeking = False
+            last = self._last = frame
+            if frame.time >= start:
+                return frame
+        self._frames = None
+        # The data ended first. The last frame stands for a time just past it (the
+        # duration often ends a little after the last frame), not for one far past
+        # it: a cut file (half downloaded) says it lasts longer than its data, and
+        # those positions would all show the same last frame.
+        if last is not None and ts - last.time <= END_TOLERANCE_SECONDS:
+            return last
+        return None
 
     def close(self) -> None:
         self.container.close()
