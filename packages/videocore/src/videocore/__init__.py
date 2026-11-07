@@ -25,6 +25,7 @@ from videocore.inputs import (
     read_input_list,
 )
 from videocore.jobs import (
+    Footage,
     ItemResult,
     Plan,
     PlannedItem,
@@ -70,6 +71,7 @@ __all__ = [
     "BatchResult",
     "CancelToken",
     "Cancelled",
+    "Footage",
     "ItemResult",
     "NoFramesError",
     "NoVideoStreamError",
