@@ -1,6 +1,6 @@
 [project]
 name = "videoconsole"
-version = "0.2.0"
+version = "0.3.0"
 description = "Console output shared by the video-tools command lines: live progress and run reports."
 readme = "README.md"
 license = "MIT"

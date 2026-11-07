@@ -1,6 +1,6 @@
 [project]
 name = "vtools"
-version = "0.2.0"
+version = "0.3.0"
 description = "One command for videothumb and videosemanticreducer: contact sheets, frames, packs and video archives."
 readme = "README.md"
 license = "MIT"
