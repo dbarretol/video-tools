@@ -477,3 +477,22 @@ def test_summary_and_grid_fall_back_to_precise_sampling(clip, tmp_path, monkeypa
         monkeypatch.setattr(pipeline, name, spy)
     process_video(clip, tmp_path, ProcessOptions(num_snapshots=4, fingerprint=False))
     assert calls == [True, True]  # summary snapshots, then the grid (sampled separately)
+
+
+def test_archive_estimates_follow_the_decoding_work():
+    from videocore import Footage
+    from videosemanticreducer.pipeline import ProcessOptions, estimate_archive
+
+    options = ProcessOptions()
+
+    def seconds(duration, width=1280, height=720, fps=60.0, interval=4.0):
+        return estimate_archive(Footage(duration, width, height, fps, interval), options)
+
+    # Snapshots closer than keyframes are decoded precisely: a few minutes cost more
+    # than an hour, where each snapshot has its own keyframe.
+    assert seconds(300) > 1.3 * seconds(3600)
+    assert seconds(3600) == pytest.approx(seconds(7200))
+    assert seconds(300, 1920, 1080) > 1.5 * seconds(300)
+    assert seconds(600, interval=36.0) > 2 * seconds(600)  # keyframes far apart
+    # Unknown size, rate and keyframe interval still give an estimate.
+    assert 1 < estimate_archive(Footage(600.0), options) < seconds(600, 1920, 1080)
