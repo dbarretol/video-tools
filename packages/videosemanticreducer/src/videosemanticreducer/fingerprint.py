@@ -24,8 +24,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import imagehash
-
 from videocore import (
     NoVideoStreamError,
     VideoInfo,
@@ -98,6 +96,8 @@ def compute_global_hashes(
     if decoded < frames:
         logger.warning("Global hashes of %s use %d/%d frames", info.path, decoded, frames)
 
+    import imagehash  # with numpy, slow to import: only when hashing
+
     # Missing frames stay as black cells so the layout never shifts.
     collage = compose_grid(images, math.ceil(math.sqrt(frames)), cell_size=size)
     return {
@@ -128,6 +128,8 @@ def compute_keyframe_hashes(
         draft=True,
         stage="keyframe_hashes",
     )
+    import imagehash  # with numpy, slow to import: only when hashing
+
     hashes = []
     for pct, ts, img in zip(positions, timestamps, images, strict=True):
         if img is None:

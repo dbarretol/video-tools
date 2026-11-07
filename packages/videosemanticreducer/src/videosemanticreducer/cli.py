@@ -12,6 +12,7 @@ from typing import Any
 
 from rich.text import Text
 
+import videosemanticreducer
 from videoconsole import (
     Console,
     Desktop,
@@ -42,11 +43,16 @@ from videocore import (
     probe,
     read_input_list,
 )
-from videocore.commands import configured, help_epilog, with_default_task, with_help
+from videocore.commands import (
+    VersionAction,
+    configured,
+    help_epilog,
+    with_default_task,
+    with_help,
+)
 from videocore.config import add_config_commands
 from videocore.inputs import add_input_arguments, require_inputs
 from videocore.options import add_arguments, given_values
-from videosemanticreducer import __version__
 from videosemanticreducer.compare import Comparison, compare_fingerprints
 from videosemanticreducer.config import (
     CONFIG,
@@ -115,7 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action=VersionAction, version=lambda: videosemanticreducer.__version__
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="show debug messages")
     parser.add_argument("-q", "--quiet", action="store_true", help=QUIET_HELP)
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
