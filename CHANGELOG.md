@@ -14,6 +14,9 @@
   managed 24%. For the reference batch it says 59 s (real 63 s) instead of 19 s. Parallel videos
   are expected to gain less (`N**0.3` instead of `N**0.7`), as measured. Times between 1 and 10
   minutes are shown to 10 s, e.g. "about 1 min 30 s" instead of "about 2 min".
+- Faster start: numpy (through imagehash), PyYAML and `importlib.metadata` are only imported
+  when a fingerprint is computed, a config file exists and `--version` is asked for. `vsr --help`
+  takes about 0.44 s instead of 0.64 s; `vtools` and `vsr` commands start about 0.15 s sooner.
 - `videocore`: `Task.estimate` takes a `Footage` (duration, size, frame rate, keyframe interval)
   instead of the duration; `PlannedItem.footage` replaces the `duration` field, which remains as a
   property.
