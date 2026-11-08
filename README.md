@@ -260,6 +260,7 @@ packages/
   videothumb/             contact sheets, frames and packs: CLI and desktop app
   videosemanticreducer/   archives, fingerprints, status, compare and verify
   vtools/                 one command for both tools
+packaging/                PyInstaller build of the Windows executables and its smoke test
 benchmarks/               timing harness (bench.py) and drivers for the tools
 docs/images/              the images of this README, and the script that makes them
 ```
