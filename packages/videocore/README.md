@@ -10,7 +10,8 @@ used on its own.
 `sample_frames`/`iter_frames` take frames at exact positions (`mode="precise"`) or at the
 keyframe before each position (`mode="keyframe"`, several times faster). With `fallback=True`,
 keyframe mode takes precisely the positions where it would repeat the previous keyframe or got no
-frame, so every position shows a distinct frame.
+frame, so every position shows a distinct frame. Precise mode decodes on from the previous frame
+instead of seeking back when the next position is closer than a seek usually costs.
 
 ## Options
 
@@ -70,7 +71,9 @@ built-in default when the file cannot be read.
 `videocore.jobs` is the contract between a tool and whatever runs it (a CLI today, a GUI later).
 A tool implements a `Task`: where the output of a video goes, whether an existing output is still
 good (`SKIPPED`) or was made with other options (`OUTDATED`), how to process one video and how to
-clean up after a killed one. Then:
+clean up after a killed one, and how long a video should take: `Task.estimate` gets its
+`Footage` (duration, size, frame rate and keyframe interval, read when planning without decoding).
+Then:
 
 ```python
 planned = plan(task, videos, options, RunOptions(output=out, workers=4), source=folder)

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- The READMEs of videothumb, videosemanticreducer and vtools follow the main one: a table of
+  contents, what each tool makes, a quick start, one section per command with its options, and
+  links to the main README for what all tools share (choosing videos, the console, exit codes and
+  JSON) instead of repeating it. videosemanticreducer documents the match levels of `verify` and
+  `compare`.
+
 ## 0.3.0 - 2026-11-07
 
 ### Performance
